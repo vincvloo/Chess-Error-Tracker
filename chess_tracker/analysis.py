@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import sqlite3
-import sys
 from datetime import datetime, timezone
+from typing import TypedDict
 
 import chess
 import chess.engine
 import chess.pgn
+
+logger = logging.getLogger(__name__)
 
 INACCURACY = 50
 MISTAKE = 100
@@ -22,6 +25,42 @@ PIECE_VALUE = {
     chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
     chess.ROOK: 5, chess.QUEEN: 9, chess.KING: 0,
 }
+
+
+class GameRecord(TypedDict):
+    url: str
+    username: str
+    end_time: int
+    date: str
+    time_class: str
+    my_colour: str
+    my_rating: int
+    opp_rating: int
+    result: str
+    eco: str
+    moves_played: int
+    opening_moves: int
+    middlegame_moves: int
+    endgame_moves: int
+
+
+class MistakeRecord(TypedDict):
+    game_url: str
+    username: str
+    date: str
+    end_time: int
+    time_class: str
+    my_rating: int
+    my_colour: str
+    move_number: int
+    phase: str
+    severity: str
+    cp_loss: int
+    category: str
+    played: str
+    best: str
+    clock_seconds: float | None
+    fen: str
 
 
 def score_cp(info, colour: chess.Color) -> int:
@@ -113,7 +152,7 @@ def _iter_own_moves(game: chess.pgn.Game, me: chess.Color):
 
 
 def analyse_game(game_json: dict, user: str, engine: chess.engine.SimpleEngine,
-                 depth: int, min_loss: int) -> tuple[dict, list[dict]] | None:
+                 depth: int, min_loss: int) -> tuple[GameRecord, list[MistakeRecord]] | None:
     pgn_text = game_json.get("pgn")
     if not pgn_text:
         return None
@@ -127,7 +166,7 @@ def analyse_game(game_json: dict, user: str, engine: chess.engine.SimpleEngine,
     me, mine, theirs = resolved
 
     end_time = game_json.get("end_time", 0)
-    rec = {
+    rec: GameRecord = {
         "url": game_json.get("url", ""),
         "username": user.lower(),
         "end_time": end_time,
@@ -144,7 +183,7 @@ def analyse_game(game_json: dict, user: str, engine: chess.engine.SimpleEngine,
         "endgame_moves": 0,
     }
 
-    mistakes: list[dict] = []
+    mistakes: list[MistakeRecord] = []
     limit = chess.engine.Limit(depth=depth)
 
     for board, played, node in _iter_own_moves(game, me):
@@ -252,6 +291,5 @@ def backfill_phase_moves(conn: sqlite3.Connection, user: str) -> None:
             updated += 1
 
     if updated:
-        print(f"[{user}] backfilled phase-move counts for {updated} games"
-              + (f", {skipped} skipped (PGN no longer cached)" if skipped else ""),
-              file=sys.stderr)
+        logger.info(f"[{user}] backfilled phase-move counts for {updated} games"
+                    + (f", {skipped} skipped (PGN no longer cached)" if skipped else ""))
