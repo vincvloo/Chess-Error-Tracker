@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
-import sys
 import time
 from datetime import datetime, timezone
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 API = "https://api.chess.com/pub"
 
@@ -40,16 +42,16 @@ class ChessComClient:
             except requests.exceptions.RequestException as exc:
                 last_exc = exc
                 wait = 2 ** attempt
-                print(f"\n  {exc.__class__.__name__}, retrying in {wait:.0f}s",
-                      file=sys.stderr)
+                logger.warning(f"\n  {exc.__class__.__name__}, retrying in {wait:.0f}s")
                 time.sleep(wait)
                 continue
             self.requests_made += 1
             if r.status_code == 429:
                 wait = float(r.headers.get("Retry-After", 2 ** attempt))
-                print(f"\n  429 received, backing off {wait:.0f}s", file=sys.stderr)
+                logger.warning(f"\n  429 received, backing off {wait:.0f}s")
                 time.sleep(wait)
                 continue
+            logger.debug(f"GET {url} -> {r.status_code}")
             return r
         if last_exc is not None:
             raise RuntimeError(f"Gave up on {url} after repeated connection errors") from last_exc
@@ -126,8 +128,8 @@ def collect_games(client: ChessComClient, user: str, since: str | None,
             fetched += 1
         games.extend(month_games)
 
-    print(f"  {len(archives)} months: {cached} from local store, {fetched} fetched "
-          f"({client.requests_made} HTTP requests this run)", file=sys.stderr)
+    logger.info(f"  {len(archives)} months: {cached} from local store, {fetched} fetched "
+                f"({client.requests_made} HTTP requests this run)")
 
     if time_class:
         games = [g for g in games if g.get("time_class") == time_class]

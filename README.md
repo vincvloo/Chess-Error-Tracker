@@ -120,6 +120,32 @@ chess-tracker --user YOURNAME --report-only --last-days 90
 | `--report-only` | Report from the database. No network, no engine. |
 | `--last-days` | Restrict the report to recent games. |
 | `--export` | Write all stored mistakes to a CSV. |
+| `--export-html` | Write an interactive, filterable dashboard to this HTML file. Report-only, no network. |
+| `--config` | Path to a JSON file of defaults for the options above. See below. |
+| `--quiet` | Suppress routine progress messages; warnings and errors still show. |
+| `--verbose` | Show extra detail, including every HTTP request made. |
+
+### Config file
+
+If you always pass the same `--email`, `--depth`, `--threads` etc., put them
+in a JSON file instead of retyping them every run. By default the tool looks
+for `~/.chess-tracker.json`; pass `--config path/to/file.json` to use a
+different one.
+
+```json
+{
+  "email": "you@example.com",
+  "depth": 18,
+  "threads": 4,
+  "pause": 0.8
+}
+```
+
+Any of `email`, `db`, `engine`, `depth`, `threads`, `pause`, `min_loss`,
+`time_class` can go in the file. A flag passed on the command line always
+wins over the config file, which always wins over the built-in default.
+`--user` is deliberately not configurable this way -- it stays a required,
+per-run flag.
 
 ### Choosing a depth
 

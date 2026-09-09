@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
+import logging
 import os
 import sys
 from datetime import datetime, timezone
@@ -31,12 +33,64 @@ from .engine import ENGINE_HELP, find_engine
 from .html_export import export_html
 from .reports import compare, list_users, report
 
+logger = logging.getLogger(__name__)
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_DB = os.path.join(PROJECT_ROOT, "chess_tracker.db")
+DEFAULT_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".chess-tracker.json")
+
+# Config-file keys that are allowed to override a CLI default. --user is
+# deliberately excluded: it stays a per-invocation, always-required flag
+# rather than something you'd want silently defaulted from a file.
+CONFIG_KEYS = {"email", "db", "engine", "depth", "threads", "pause",
+               "min_loss", "time_class"}
 
 
-def build_parser() -> argparse.ArgumentParser:
+def load_config(path: str, required: bool) -> dict:
+    """
+    Read CLI defaults from a JSON object file. Silently returns {} when the
+    default path doesn't exist; a path passed explicitly via --config is
+    required to exist. Unrecognised keys are warned about, not fatal, so a
+    typo doesn't outright break every run.
+    """
+    if not os.path.isfile(path):
+        if required:
+            sys.exit(f"Config file not found: {path}")
+        return {}
+
+    with open(path, encoding="utf-8") as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError as exc:
+            sys.exit(f"Invalid JSON in config file {path}: {exc}")
+
+    if not isinstance(data, dict):
+        sys.exit(f"Config file {path} must contain a JSON object")
+
+    unknown = set(data) - CONFIG_KEYS
+    if unknown:
+        print(f"Warning: ignoring unrecognised config key(s) in {path}: "
+              f"{', '.join(sorted(unknown))}", file=sys.stderr)
+        data = {k: v for k, v in data.items() if k in CONFIG_KEYS}
+
+    return data
+
+
+def _peek_config_path(argv: list[str]) -> str | None:
+    """Extract --config from argv without needing the rest of the real
+    parser's required arguments to already be present."""
+    peek = argparse.ArgumentParser(add_help=False)
+    peek.add_argument("--config")
+    ns, _ = peek.parse_known_args(argv)
+    return ns.config
+
+
+def build_parser(config: dict | None = None) -> argparse.ArgumentParser:
+    config = config or {}
     p = argparse.ArgumentParser(description="Longitudinal chess error tracker")
+    p.add_argument("--config",
+                   help="Path to a JSON file of defaults for the options below "
+                        f"(default: {DEFAULT_CONFIG_PATH} if present)")
     p.add_argument("--user", required=True,
                    help="Chess.com username. Comma-separate to scan several: "
                         "--user me,rival1,rival2")
@@ -45,20 +99,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--compare", action="store_true",
                    help="Side-by-side comparison instead of per-user reports. "
                         "Needs two or more users in --user")
-    p.add_argument("--email", help="Contact email for the User-Agent header. "
-                                   "Required by Chess.com unless --report-only")
-    p.add_argument("--db", default=DEFAULT_DB, help="SQLite database path")
-    p.add_argument("--engine", default=None,
+    p.add_argument("--email", default=config.get("email"),
+                   help="Contact email for the User-Agent header. "
+                        "Required by Chess.com unless --report-only")
+    p.add_argument("--db", default=config.get("db", DEFAULT_DB), help="SQLite database path")
+    p.add_argument("--engine", default=config.get("engine"),
                    help="Path to the Stockfish binary. Auto-detected if omitted.")
-    p.add_argument("--depth", type=int, default=14)
+    p.add_argument("--depth", type=int, default=config.get("depth", 14))
     p.add_argument("--since", help="Earliest month to include, YYYY-MM")
-    p.add_argument("--time-class", choices=["bullet", "blitz", "rapid", "daily"])
+    p.add_argument("--time-class", choices=["bullet", "blitz", "rapid", "daily"],
+                   default=config.get("time_class"))
     p.add_argument("--phase", choices=list(PHASES),
                    help="Restrict the report/comparison to one phase of the game")
     p.add_argument("--limit", type=int, help="Cap on new games analysed per run")
-    p.add_argument("--min-loss", type=int, default=INACCURACY)
-    p.add_argument("--threads", type=int, default=2)
-    p.add_argument("--pause", type=float, default=0.6,
+    p.add_argument("--min-loss", type=int, default=config.get("min_loss", INACCURACY))
+    p.add_argument("--threads", type=int, default=config.get("threads", 2))
+    p.add_argument("--pause", type=float, default=config.get("pause", 0.6),
                    help="Seconds between HTTP requests")
     p.add_argument("--report-only", action="store_true",
                    help="Report from the database, no network and no engine")
@@ -67,11 +123,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--export-html", help="Write an interactive, filterable "
                         "dashboard (by player, phase, time class, mistake "
                         "type) to this HTML file. Report-only, no network.")
+    verbosity = p.add_mutually_exclusive_group()
+    verbosity.add_argument("--quiet", action="store_true",
+                   help="Suppress routine progress messages; warnings and errors still show")
+    verbosity.add_argument("--verbose", action="store_true",
+                   help="Show extra detail, including each HTTP request made")
     return p
 
 
 def main() -> None:
-    args = build_parser().parse_args()
+    argv = sys.argv[1:]
+    explicit_config = _peek_config_path(argv)
+    config = load_config(explicit_config or DEFAULT_CONFIG_PATH, required=explicit_config is not None)
+
+    args = build_parser(config).parse_args(argv)
+
+    level = logging.DEBUG if args.verbose else logging.WARNING if args.quiet else logging.INFO
+    logging.basicConfig(level=level, format="%(message)s", stream=sys.stderr)
 
     conn = open_db(args.db)
     users = [u.strip() for u in args.user.split(",") if u.strip()]
@@ -91,7 +159,7 @@ def main() -> None:
         if not os.path.isfile(engine_path):
             sys.exit(f"No Stockfish binary at {engine_path}\n\n{ENGINE_HELP}")
         if not args.engine:
-            print(f"Using engine: {engine_path}", file=sys.stderr)
+            logger.info(f"Using engine: {engine_path}")
 
         engine = None
         try:
@@ -101,7 +169,7 @@ def main() -> None:
                 started = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 client = ChessComClient(args.email, conn, args.pause)
 
-                print(f"\n[{user}] fetching game index...", file=sys.stderr)
+                logger.info(f"\n[{user}] fetching game index...")
                 try:
                     games = collect_games(client, user, args.since,
                                           args.time_class, args.limit)
@@ -110,8 +178,8 @@ def main() -> None:
 
                 todo = [g for g in games
                         if not already_analysed(conn, g.get("url", ""), user, args.depth)]
-                print(f"[{user}] {len(games)} games known, {len(todo)} need "
-                      f"analysis at depth {args.depth}", file=sys.stderr)
+                logger.info(f"[{user}] {len(games)} games known, {len(todo)} need "
+                            f"analysis at depth {args.depth}")
 
                 new = 0
                 try:
@@ -121,14 +189,15 @@ def main() -> None:
                             rec, mistakes = result
                             save_game(conn, rec, mistakes, args.depth)
                             new += 1
-                        print(f"\r[{user}] analysed {i}/{len(todo)}", end="",
-                              file=sys.stderr)
+                        if not args.quiet:
+                            print(f"\r[{user}] analysed {i}/{len(todo)}", end="",
+                                  file=sys.stderr)
                 except KeyboardInterrupt:
-                    print(f"\n[{user}] interrupted. Everything analysed so far "
-                          f"is saved.", file=sys.stderr)
+                    logger.warning(f"\n[{user}] interrupted. Everything analysed so far "
+                                   f"is saved.")
                     raise
                 finally:
-                    if todo:
+                    if todo and not args.quiet:
                         print(file=sys.stderr)
                     with conn:
                         conn.execute("""INSERT INTO runs
@@ -138,7 +207,7 @@ def main() -> None:
                                       datetime.now(timezone.utc).isoformat(timespec="seconds"),
                                       client.requests_made, new, args.depth))
         except KeyboardInterrupt:
-            print("Stopped.", file=sys.stderr)
+            logger.warning("Stopped.")
         finally:
             if engine is not None:
                 engine.quit()
@@ -166,16 +235,15 @@ def main() -> None:
                 w = csv.DictWriter(f, fieldnames=rows[0].keys())
                 w.writeheader()
                 w.writerows(dict(r) for r in rows)
-            print(f"Exported {len(rows)} mistakes to {args.export}", file=sys.stderr)
+            logger.info(f"Exported {len(rows)} mistakes to {args.export}")
 
     if args.export_html:
         n = export_html(conn, users, args.export_html)
         if n:
-            print(f"Wrote interactive dashboard for {n} user(s) to "
-                  f"{args.export_html}", file=sys.stderr)
+            logger.info(f"Wrote interactive dashboard for {n} user(s) to "
+                        f"{args.export_html}")
         else:
-            print("No stored games for the given users, nothing written.",
-                  file=sys.stderr)
+            logger.warning("No stored games for the given users, nothing written.")
 
     conn.close()
 

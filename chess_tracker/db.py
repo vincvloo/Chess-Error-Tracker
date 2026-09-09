@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
+from .analysis import GameRecord, MistakeRecord
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS games (
     url           TEXT NOT NULL,
@@ -100,7 +102,8 @@ def already_analysed(conn: sqlite3.Connection, url: str, username: str,
     return row is not None and row["depth"] >= depth
 
 
-def save_game(conn: sqlite3.Connection, rec: dict, mistakes: list[dict], depth: int) -> None:
+def save_game(conn: sqlite3.Connection, rec: GameRecord, mistakes: list[MistakeRecord],
+              depth: int) -> None:
     """Write one analysed game. Replaces any earlier, shallower analysis."""
     with conn:
         conn.execute("DELETE FROM mistakes WHERE game_url = ? AND username = ?",
