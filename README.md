@@ -1,5 +1,7 @@
 # Chess Error Tracker
 
+[![CI](https://github.com/vincvloo/Chess-Error-Tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/vincvloo/Chess-Error-Tracker/actions/workflows/ci.yml)
+
 Finds the mistakes you keep making, not the ones you made yesterday.
 
 Per-game review tells you what went wrong in that game. This tells you what goes
