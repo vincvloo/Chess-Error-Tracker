@@ -22,13 +22,11 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
 
-import chess.engine
-
-from .analysis import INACCURACY, PHASES, analyse_game, backfill_phase_moves
-from .chesscom import ChessComClient, ChessComError, collect_games
-from .db import already_analysed, open_db, save_game
+from .analysis import INACCURACY, PHASES, backfill_phase_moves
+from .analysis_runner import run_analysis
+from .chesscom import ChessComError
+from .db import open_db
 from .engine import ENGINE_HELP, find_engine
 from .html_export import export_html
 from .reports import compare, list_users, report
@@ -161,56 +159,12 @@ def main() -> None:
         if not args.engine:
             logger.info(f"Using engine: {engine_path}")
 
-        engine = None
         try:
-            engine = chess.engine.SimpleEngine.popen_uci(engine_path)
-            engine.configure({"Threads": args.threads})
-            for user in users:
-                started = datetime.now(timezone.utc).isoformat(timespec="seconds")
-                client = ChessComClient(args.email, conn, args.pause)
-
-                logger.info(f"\n[{user}] fetching game index...")
-                try:
-                    games = collect_games(client, user, args.since,
-                                          args.time_class, args.limit)
-                except ChessComError as exc:
-                    sys.exit(str(exc))
-
-                todo = [g for g in games
-                        if not already_analysed(conn, g.get("url", ""), user, args.depth)]
-                logger.info(f"[{user}] {len(games)} games known, {len(todo)} need "
-                            f"analysis at depth {args.depth}")
-
-                new = 0
-                try:
-                    for i, g in enumerate(todo, 1):
-                        result = analyse_game(g, user, engine, args.depth, args.min_loss)
-                        if result:
-                            rec, mistakes = result
-                            save_game(conn, rec, mistakes, args.depth)
-                            new += 1
-                        if not args.quiet:
-                            print(f"\r[{user}] analysed {i}/{len(todo)}", end="",
-                                  file=sys.stderr)
-                except KeyboardInterrupt:
-                    logger.warning(f"\n[{user}] interrupted. Everything analysed so far "
-                                   f"is saved.")
-                    raise
-                finally:
-                    if todo and not args.quiet:
-                        print(file=sys.stderr)
-                    with conn:
-                        conn.execute("""INSERT INTO runs
-                            (username, started_at, finished_at, requests_made,
-                             games_new, depth) VALUES (?, ?, ?, ?, ?, ?)""",
-                                     (user.lower(), started,
-                                      datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                                      client.requests_made, new, args.depth))
-        except KeyboardInterrupt:
-            logger.warning("Stopped.")
-        finally:
-            if engine is not None:
-                engine.quit()
+            run_analysis(conn, users, args.email, engine_path, args.depth, args.threads,
+                         args.pause, since=args.since, time_class=args.time_class,
+                         limit=args.limit, min_loss=args.min_loss, quiet=args.quiet)
+        except ChessComError as exc:
+            sys.exit(str(exc))
 
     if args.phase or args.export_html:
         for user in users:
