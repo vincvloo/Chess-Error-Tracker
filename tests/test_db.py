@@ -1,6 +1,4 @@
-import sqlite3
-
-from chess_tracker.db import already_analysed, migrate, open_db, save_game
+from chess_tracker.db import already_analysed, open_db, save_game
 
 _REC = {
     "url": "https://example.com/g1", "username": "alice", "end_time": 1000,
@@ -58,52 +56,3 @@ def test_save_game_replaces_earlier_shallower_analysis():
     assert len(mistakes) == 1
     assert mistakes[0]["category"] == "positional or planning error"
     assert already_analysed(conn, _REC["url"], "alice", 18) is True
-
-
-def _legacy_db() -> sqlite3.Connection:
-    """A database in the pre-multi-user schema: games keyed on url alone."""
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    conn.executescript("""
-        CREATE TABLE games (
-            url TEXT PRIMARY KEY, username TEXT, end_time INTEGER, date TEXT,
-            time_class TEXT, my_colour TEXT, my_rating INTEGER, opp_rating INTEGER,
-            result TEXT, eco TEXT, moves_played INTEGER, depth INTEGER, analysed_at TEXT
-        );
-        CREATE TABLE mistakes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, game_url TEXT, username TEXT,
-            date TEXT, end_time INTEGER, time_class TEXT, my_rating INTEGER,
-            my_colour TEXT, move_number INTEGER, phase TEXT, severity TEXT,
-            cp_loss INTEGER, category TEXT, played TEXT, best TEXT,
-            clock_seconds REAL, fen TEXT
-        );
-    """)
-    conn.execute("""INSERT INTO games VALUES
-        ('https://example.com/g1','alice',1000,'2024-01-01','blitz','white',
-         1500,1400,'win','C00',20,14,'2024-01-01T00:00:00')""")
-    conn.execute("""INSERT INTO mistakes
-        (game_url, username, date, end_time, time_class, my_rating, my_colour,
-         move_number, phase, severity, cp_loss, category, played, best,
-         clock_seconds, fen)
-        VALUES ('https://example.com/g1','alice','2024-01-01',1000,'blitz',1500,
-                'white',5,'opening','blunder',300,'hung a pawn','e4','d4',20.0,'fen-string')""")
-    conn.commit()
-    return conn
-
-
-def test_migrate_upgrades_legacy_schema_without_losing_rows():
-    conn = _legacy_db()
-    migrate(conn)
-
-    pk_cols = {c["name"] for c in conn.execute("PRAGMA table_info(games)").fetchall() if c["pk"]}
-    assert pk_cols == {"url", "username"}
-
-    game = conn.execute(
-        "SELECT * FROM games WHERE url = ? AND username = ?",
-        ("https://example.com/g1", "alice")).fetchone()
-    assert game is not None
-    assert game["moves_played"] == 20
-
-    mistake = conn.execute(
-        "SELECT * FROM mistakes WHERE game_url = ?", ("https://example.com/g1",)).fetchone()
-    assert mistake["category"] == "hung a pawn"

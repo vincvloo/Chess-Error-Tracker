@@ -1,9 +1,8 @@
-"""SQLite schema, migration, and persistence."""
+"""SQLite schema and persistence."""
 
 from __future__ import annotations
 
 import sqlite3
-import sys
 from datetime import datetime, timezone
 
 SCHEMA = """
@@ -83,71 +82,11 @@ CREATE INDEX IF NOT EXISTS idx_games_user    ON games(username, end_time);
 """
 
 
-def migrate(conn: sqlite3.Connection) -> None:
-    """
-    Databases written before multi-user support keyed `games` on the URL alone,
-    which silently drops a game when two tracked players faced each other.
-    Rebuild those tables with the composite key, preserving all rows.
-    """
-    cols = conn.execute("PRAGMA table_info(games)").fetchall()
-    if not cols:
-        return  # brand new database, schema is already current
-    pk_cols = {c["name"] for c in cols if c["pk"]}
-    if "username" in pk_cols:
-        add_phase_move_columns(conn)
-        return  # per-user keying already migrated
-
-    print("Migrating database to per-user keying...", file=sys.stderr)
-    with conn:
-        conn.execute("PRAGMA foreign_keys = OFF")
-        conn.execute("ALTER TABLE games RENAME TO games_old")
-        conn.execute("ALTER TABLE mistakes RENAME TO mistakes_old")
-        conn.executescript(SCHEMA)
-        conn.execute("""
-            INSERT OR IGNORE INTO games
-            (url, username, end_time, date, time_class, my_colour,
-             my_rating, opp_rating, result, eco, moves_played, depth, analysed_at)
-            SELECT url, username, end_time, date, time_class, my_colour,
-                   my_rating, opp_rating, result, eco, moves_played, depth,
-                   analysed_at FROM games_old
-        """)
-        conn.execute("""
-            INSERT INTO mistakes
-            (game_url, username, date, end_time, time_class, my_rating, my_colour,
-             move_number, phase, severity, cp_loss, category, played, best,
-             clock_seconds, fen)
-            SELECT game_url, username, date, end_time, time_class, my_rating,
-                   my_colour, move_number, phase, severity, cp_loss, category,
-                   played, best, clock_seconds, fen FROM mistakes_old
-        """)
-        conn.execute("DROP TABLE mistakes_old")
-        conn.execute("DROP TABLE games_old")
-        conn.execute("PRAGMA foreign_keys = ON")
-    print("Migration complete. No data lost.", file=sys.stderr)
-
-    add_phase_move_columns(conn)
-
-
-def add_phase_move_columns(conn: sqlite3.Connection) -> None:
-    """
-    Databases written before per-phase rates existed lack these columns.
-    Adding them is a plain ALTER (existing rows just get NULL); the actual
-    numbers get filled in by backfill_phase_moves() from cached PGNs.
-    """
-    cols = {c["name"] for c in conn.execute("PRAGMA table_info(games)").fetchall()}
-    if not cols or "opening_moves" in cols:
-        return
-    with conn:
-        for col in ("opening_moves", "middlegame_moves", "endgame_moves"):
-            conn.execute(f"ALTER TABLE games ADD COLUMN {col} INTEGER")
-
-
 def open_db(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
-    migrate(conn)
     return conn
 
 

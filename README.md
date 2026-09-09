@@ -178,12 +178,6 @@ Everything lives in one SQLite file, `chess_tracker.db` next to the script by de
 Everything is scoped by username, so one database can hold any number of people
 without their data mixing.
 
-If you built a database with an earlier version, it is migrated automatically on
-first open. The old layout keyed games on the URL alone, which silently dropped a
-game whenever two tracked players faced each other. The migration rebuilds the
-tables with the correct key and preserves every row. It runs once and prints a
-line when it does.
-
 The FEN column means every stored mistake can be pasted straight into a board.
 Any SQL client will open the file, so you are not limited to the built-in report:
 
