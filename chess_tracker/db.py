@@ -105,6 +105,8 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.executescript(SCHEMA)
         conn.execute("""
             INSERT OR IGNORE INTO games
+            (url, username, end_time, date, time_class, my_colour,
+             my_rating, opp_rating, result, eco, moves_played, depth, analysed_at)
             SELECT url, username, end_time, date, time_class, my_colour,
                    my_rating, opp_rating, result, eco, moves_played, depth,
                    analysed_at FROM games_old
