@@ -100,6 +100,31 @@ chess-tracker --user YOURNAME --report-only --last-days 90
 
 ---
 
+## Web app
+
+Prefer clicking over typing flags? There's a local web app: pick or add users,
+set fetch criteria in a form, watch analysis progress live, and browse the
+same interactive dashboard from a browser window instead of an exported file.
+Runs entirely on your own machine against your own database -- no hosted
+server, no account, nothing leaves your computer except the same Chess.com API
+calls the CLI already makes.
+
+```
+pip install -e ".[web]"
+chess-tracker serve
+```
+
+Opens a browser window pointed at the app (in "app mode" -- no address bar --
+if Chrome or Edge is found, a normal tab otherwise). Add `--no-browser` to
+just start the server and open the URL yourself, or `--port` if 8000 is
+already taken. `--db` and `--engine` work the same as the CLI's flags.
+
+This is a genuinely separate install: the plain `pip install -e .` from setup
+stays exactly as light as it always was. The web app is additional, not a
+replacement -- everything above still works exactly as documented.
+
+---
+
 ## Options
 
 | Flag | Purpose |
@@ -370,18 +395,23 @@ The code is a small package, `chess_tracker/`, split along its natural seams:
 | `db.py` | SQLite schema and persistence (`open_db`, `save_game`, `already_analysed`). |
 | `chesscom.py` | The Chess.com API client: serial, cached, conditional requests. |
 | `analysis.py` | Stockfish analysis and mistake classification (`classify`, `analyse_game`). |
+| `analysis_runner.py` | Orchestrates a fetch+analyse run; shared by the CLI and the web app's background jobs. |
 | `reports.py` | Text reports and player comparisons, straight from the database. |
-| `html_export.py` | The interactive HTML dashboard, built from `templates/dashboard_template.html`. |
-| `cli.py` | Argument parsing and orchestration (the `chess-tracker` entry point). |
+| `html_export.py` | The interactive HTML dashboard: `build_dashboard_data`/`render_dashboard_html` (shared with the web app's `/dashboard` route) plus `export_html`, which writes it to a file. |
+| `cli.py` | Argument parsing and orchestration (the `chess-tracker` entry point; dispatches to `web/` for `serve`). |
+| `web/` | The local FastAPI app (`chess-tracker serve`) -- `app.py` (the FastAPI app), `jobs.py` (background job manager, one job at a time), `routes_pages.py`/`routes_api.py`, `serve_cli.py` (the `serve` subcommand), `browser.py` (app-mode window launch). |
 
 ## Running the tests
 
 ```
-pip install -e ".[dev]"
+pip install -e ".[dev,web]"
 pytest
 ```
 
 The suite covers the pure logic -- mistake classification, phase detection,
-schema and persistence round trips, report query building -- and the
-Chess.com client's error handling, with `requests` mocked. It needs neither
-Stockfish nor network access. CI runs it on every push and pull request.
+schema and persistence round trips, report query building -- the Chess.com
+client's error handling with `requests` mocked, and the web app's job manager
+and routes with FastAPI's `TestClient`. It needs neither Stockfish nor network
+access. CI runs it on every push and pull request. Install both extras
+together as shown above -- `test_jobs.py`/`test_web_routes.py` import FastAPI
+at module level, so they fail to even collect without the `web` extra.
