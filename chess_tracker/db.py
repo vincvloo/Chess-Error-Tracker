@@ -88,6 +88,15 @@ def open_db(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL lets a reader (e.g. the web app's dashboard route) see a consistent
+    # view without blocking on a concurrent writer (a running analysis job).
+    # It does NOT make two concurrent writers safe -- busy_timeout covers
+    # that: a writer that does collide with another (e.g. the CLI run
+    # against the same file while the app has a job going) retries for up
+    # to 5s instead of immediately raising "database is locked". Both are
+    # no-ops for an in-memory database (as used throughout the test suite).
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     conn.executescript(SCHEMA)
     return conn
 

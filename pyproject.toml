@@ -11,7 +11,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "httpx>=0.27"]
+web = ["fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multipart>=0.0.9,<1"]
 
 [project.scripts]
 chess-tracker = "chess_tracker.cli:main"
@@ -21,7 +22,8 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["chess_tracker"]
+packages = ["chess_tracker", "chess_tracker.web"]
 
 [tool.setuptools.package-data]
 chess_tracker = ["templates/*.html"]
+"chess_tracker.web" = ["templates/*.html"]
