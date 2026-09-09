@@ -14,11 +14,14 @@ dependencies = [
 dev = ["pytest>=8"]
 
 [project.scripts]
-chess-tracker = "chess_error_tracker:main"
+chess-tracker = "chess_tracker.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["chess_error_tracker"]
+packages = ["chess_tracker"]
+
+[tool.setuptools.package-data]
+chess_tracker = ["templates/*.html"]

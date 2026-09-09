@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Mistake Explorer</title>
+<style>
+:root {
+  --bg: #f7f7f8; --panel: #ffffff; --border: #e2e2e6; --text: #1c1c1f;
+  --muted: #6b6b74; --accent: #3f6fd6; --accent-soft: #e8edfb;
+  --max-cell: #fde2e2; --track: #ececf0;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17181c; --panel: #1f2024; --border: #313238; --text: #ececef;
+    --muted: #9a9aa2; --accent: #7da2ff; --accent-soft: #263252;
+    --max-cell: #4a2a2c; --track: #2a2b30;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+header { padding: 20px 24px 8px; }
+h1 { font-size: 20px; margin: 0 0 2px; }
+.meta { color: var(--muted); font-size: 12.5px; }
+.app { display: grid; grid-template-columns: 260px 1fr; gap: 20px; padding: 16px 24px 40px; align-items: start; }
+@media (max-width: 800px) { .app { grid-template-columns: 1fr; } }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.filters { display: flex; flex-direction: column; gap: 12px; position: sticky; top: 16px; }
+@media (max-width: 800px) { .filters { position: static; } }
+.group summary { cursor: pointer; font-weight: 600; font-size: 13px; padding: 2px 0; }
+.group { margin-bottom: 4px; }
+.groupbar { display: flex; justify-content: space-between; align-items: center; }
+.grouplinks { display: flex; gap: 8px; }
+.grouplinks button { background: none; border: none; color: var(--accent); cursor: pointer;
+  font-size: 11.5px; padding: 0; }
+.chklist { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; max-height: 240px; overflow-y: auto; }
+label.chk { display: flex; align-items: center; gap: 7px; font-size: 12.5px; cursor: pointer; }
+label.chk input { accent-color: var(--accent); }
+.content { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+#summary { color: var(--muted); font-size: 12.5px; margin-bottom: 8px; }
+.barrow { display: grid; grid-template-columns: 130px 1fr 52px; gap: 10px; align-items: center; margin: 6px 0; }
+.barlabel { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bartrack { background: var(--track); border-radius: 5px; height: 10px; overflow: hidden; }
+.barfill { background: var(--accent); height: 100%; border-radius: 5px; transition: width .15s; }
+.barvalue { font-size: 12.5px; text-align: right; font-variant-numeric: tabular-nums; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { padding: 6px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--border); }
+th:first-child, td:first-child { text-align: left; position: sticky; left: 0; background: var(--panel); }
+thead th { color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border); }
+tr.total-row td { font-weight: 700; border-bottom: 2px solid var(--border); }
+td.maxcell { background: var(--max-cell); border-radius: 4px; }
+.refrow { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 6px; }
+select { font: inherit; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--panel); color: var(--text); }
+#gaps ul { margin: 6px 0 0; padding-left: 18px; }
+#gaps li { margin: 3px 0; }
+h2 { font-size: 14px; margin: 0 0 4px; }
+.trendhead { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.seg button { background: var(--panel); color: var(--text); border: none; padding: 4px 12px;
+  font: inherit; font-size: 12.5px; cursor: pointer; }
+.seg button.active { background: var(--accent); color: #fff; }
+.seg button + button { border-left: 1px solid var(--border); }
+.trendwrap { overflow-x: auto; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 6px 0 10px; font-size: 12px; color: var(--muted); }
+.legend .item { display: flex; align-items: center; gap: 5px; }
+.legend .swatch { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.warn-note { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.warn-note .ring { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  border: 1.5px solid var(--muted); vertical-align: middle; margin: 0 3px; }
+svg.trend text { fill: var(--muted); font-size: 10.5px; }
+svg.trend .gridline { stroke: var(--border); stroke-width: 1; }
+svg.trend .empty { fill: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Chess Mistake Explorer</h1>
+  <div class="meta">Generated __GENERATED_AT__ &middot; filter by player, game phase, time class and mistake type</div>
+</header>
+<div class="app">
+  <aside class="filters">
+    <div class="panel group" id="grp-users">
+      <div class="groupbar"><summary style="cursor:default">Players</summary>
+        <div class="grouplinks"><button data-act="all">all</button><button data-act="none">none</button></div></div>
+      <div class="chklist" id="chk-users"></div>
+    </div>
+    <div class="panel group" id="grp-phases">
+      <div class="groupbar"><summary style="cursor:default">Phase</summary>
+        <div class="grouplinks"><button data-act="all">all</button><button data-act="none">none</button></div></div>
+      <div class="chklist" id="chk-phases"></div>
+    </div>
+    <div class="panel group" id="grp-tc">
+      <div class="groupbar"><summary style="cursor:default">Time class</summary>
+        <div class="grouplinks"><button data-act="all">all</button><button data-act="none">none</button></div></div>
+      <div class="chklist" id="chk-tc"></div>
+    </div>
+    <div class="panel group" id="grp-cats">
+      <div class="groupbar"><summary style="cursor:default">Mistake type</summary>
+        <div class="grouplinks"><button data-act="all">all</button><button data-act="none">none</button></div></div>
+      <div class="chklist" id="chk-cats"></div>
+    </div>
+  </aside>
+  <main class="content">
+    <div class="panel">
+      <h2>Error rate (per 100 moves, selected filters)</h2>
+      <div id="summary"></div>
+      <div id="bars"></div>
+    </div>
+    <div class="panel">
+      <div class="trendhead">
+        <h2 style="margin:0">Evolution over time</h2>
+        <div class="seg" id="granularity">
+          <button data-g="month" class="active">Month</button>
+          <button data-g="quarter">3 Months</button>
+          <button data-g="half">6 Months</button>
+          <button data-g="year">Year</button>
+        </div>
+      </div>
+      <div class="legend" id="trendLegend"></div>
+      <div class="trendwrap"><svg id="trendChart" class="trend"></svg></div>
+      <div class="warn-note" id="trendWarnNote"></div>
+    </div>
+    <div class="panel">
+      <h2>By mistake type</h2>
+      <div class="tablewrap"><table id="table"></table></div>
+    </div>
+    <div class="panel">
+      <h2>Biggest gaps</h2>
+      <div class="refrow">reference player
+        <select id="refSelect"></select>
+      </div>
+      <div id="gaps"></div>
+    </div>
+  </main>
+</div>
+<script>
+const DATA = __DATA_JSON__;
+
+const state = {
+  users: new Set(DATA.users),
+  phases: new Set(DATA.phases),
+  timeClasses: new Set(DATA.timeClasses),
+  categories: new Set(DATA.categories),
+  ref: DATA.users[0],
+  granularity: "month",
+};
+
+const PALETTE = ["#3f6fd6", "#e08a3f", "#3fa66f", "#c1507a", "#8a63d6", "#c9a227", "#3fb6c9", "#a25a3f"];
+function colorFor(user) {
+  const idx = DATA.users.indexOf(user);
+  return PALETTE[idx % PALETTE.length];
+}
+
+function buildGroup(containerId, items, selectedSet) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = "";
+  items.forEach(item => {
+    const label = document.createElement("label");
+    label.className = "chk";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = selectedSet.has(item);
+    input.addEventListener("change", () => {
+      if (input.checked) selectedSet.add(item); else selectedSet.delete(item);
+      render();
+    });
+    const span = document.createElement("span");
+    span.textContent = item;
+    label.appendChild(input);
+    label.appendChild(span);
+    el.appendChild(label);
+  });
+}
+
+function wireGroupLinks(groupId, containerId, items, selectedSet) {
+  const grp = document.getElementById(groupId);
+  grp.querySelectorAll("button[data-act]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      selectedSet.clear();
+      if (btn.dataset.act === "all") items.forEach(i => selectedSet.add(i));
+      buildGroup(containerId, items, selectedSet);
+      render();
+    });
+  });
+}
+
+function movesFor(user) {
+  let total = 0;
+  const tcData = DATA.moves[user] || {};
+  for (const tc of state.timeClasses) {
+    const ph = tcData[tc];
+    if (!ph) continue;
+    for (const p of state.phases) total += ph[p] || 0;
+  }
+  return total;
+}
+
+function gamesFor(user) {
+  let total = 0;
+  const tcData = DATA.moves[user] || {};
+  for (const tc of state.timeClasses) {
+    const ph = tcData[tc];
+    if (ph) total += ph.games || 0;
+  }
+  return total;
+}
+
+function countFor(user, category) {
+  let total = 0;
+  const tcData = DATA.counts[user] || {};
+  for (const tc of state.timeClasses) {
+    const phData = tcData[tc];
+    if (!phData) continue;
+    for (const p of state.phases) {
+      const catData = phData[p];
+      if (catData) total += catData[category] || 0;
+    }
+  }
+  return total;
+}
+
+function rateOf(user, category) {
+  const m = movesFor(user);
+  if (!m) return null;
+  return countFor(user, category) / m * 100;
+}
+
+function totalRate(user) {
+  const m = movesFor(user);
+  if (!m) return null;
+  let n = 0;
+  for (const c of state.categories) n += countFor(user, c);
+  return n / m * 100;
+}
+
+function movesForMonths(user, monthList) {
+  let total = 0;
+  const tcData = DATA.movesByMonth[user] || {};
+  for (const tc of state.timeClasses) {
+    const monthMap = tcData[tc];
+    if (!monthMap) continue;
+    for (const mo of monthList) {
+      const md = monthMap[mo];
+      if (!md) continue;
+      for (const p of state.phases) total += md[p] || 0;
+    }
+  }
+  return total;
+}
+
+function gamesForMonths(user, monthList) {
+  let total = 0;
+  const tcData = DATA.movesByMonth[user] || {};
+  for (const tc of state.timeClasses) {
+    const monthMap = tcData[tc];
+    if (!monthMap) continue;
+    for (const mo of monthList) {
+      const md = monthMap[mo];
+      if (md) total += md.games || 0;
+    }
+  }
+  return total;
+}
+
+function countForMonths(user, monthList) {
+  let total = 0;
+  const tcData = DATA.countsByMonth[user] || {};
+  for (const tc of state.timeClasses) {
+    const phData = tcData[tc];
+    if (!phData) continue;
+    for (const p of state.phases) {
+      const monthMap = phData[p];
+      if (!monthMap) continue;
+      for (const mo of monthList) {
+        const catData = monthMap[mo];
+        if (!catData) continue;
+        for (const c of state.categories) total += catData[c] || 0;
+      }
+    }
+  }
+  return total;
+}
+
+function quarterKey(m) {
+  const [y, mo] = m.split("-").map(Number);
+  return y + "-Q" + Math.ceil(mo / 3);
+}
+
+function halfKey(m) {
+  const [y, mo] = m.split("-").map(Number);
+  return y + "-H" + (mo <= 6 ? 1 : 2);
+}
+
+function trendBuckets() {
+  const all = DATA.months;
+  const keyed = { year: m => m.slice(0, 4), quarter: quarterKey, half: halfKey }[state.granularity];
+  if (!keyed) return all.map(m => ({ key: m, months: [m] }));
+  // Lexicographic sort matches chronological order for all three key shapes
+  // ('2026', '2026-Q3', '2026-H1'), since the year prefix sorts first.
+  const keys = [...new Set(all.map(keyed))].sort();
+  return keys.map(k => ({ key: k, months: all.filter(m => keyed(m) === k) }));
+}
+
+function trendSeries(user, bkts) {
+  return bkts.map(b => {
+    const moves = movesForMonths(user, b.months);
+    const games = gamesForMonths(user, b.months);
+    const n = countForMonths(user, b.months);
+    return {
+      key: b.key,
+      rate: moves ? n / moves * 100 : null,
+      moves, games,
+      thin: games > 0 && games < DATA.thinGamesThreshold,
+    };
+  });
+}
+
+function renderTrend(users) {
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svg = document.getElementById("trendChart");
+  svg.innerHTML = "";
+  const bkts = trendBuckets();
+
+  if (!bkts.length || !users.length) {
+    svg.setAttribute("viewBox", "0 0 400 100");
+    svg.removeAttribute("width"); svg.removeAttribute("height");
+    svg.setAttribute("style", "width:100%;height:100px");
+    const t = document.createElementNS(svgNS, "text");
+    t.setAttribute("x", 10); t.setAttribute("y", 50); t.setAttribute("class", "empty");
+    t.textContent = "No data for the current filters.";
+    svg.appendChild(t);
+    document.getElementById("trendLegend").innerHTML = "";
+    document.getElementById("trendWarnNote").textContent = "";
+    return;
+  }
+
+  const seriesByUser = users.map(u => ({ user: u, pts: trendSeries(u, bkts) }));
+  const allRates = seriesByUser.flatMap(s => s.pts.map(p => p.rate)).filter(v => v != null);
+  const maxRate = Math.max(1, ...allRates) * 1.1;
+
+  const padL = 34, padR = 16, padT = 14, padB = 34;
+  const colW = 56;
+  const w = Math.max(360, padL + padR + colW * bkts.length);
+  const h = 260;
+  const plotW = w - padL - padR, plotH = h - padT - padB;
+
+  svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+  svg.setAttribute("width", w);
+  svg.setAttribute("height", h);
+  svg.removeAttribute("style");
+
+  const xFor = i => padL + (bkts.length === 1 ? plotW / 2 : (i / (bkts.length - 1)) * plotW);
+  const yFor = r => padT + plotH - (r / maxRate) * plotH;
+
+  const steps = 4;
+  for (let s = 0; s <= steps; s++) {
+    const val = maxRate * s / steps;
+    const y = yFor(val);
+    const line = document.createElementNS(svgNS, "line");
+    line.setAttribute("x1", padL); line.setAttribute("x2", w - padR);
+    line.setAttribute("y1", y); line.setAttribute("y2", y);
+    line.setAttribute("class", "gridline");
+    svg.appendChild(line);
+    const label = document.createElementNS(svgNS, "text");
+    label.setAttribute("x", padL - 6); label.setAttribute("y", y + 3);
+    label.setAttribute("text-anchor", "end");
+    label.textContent = val.toFixed(0);
+    svg.appendChild(label);
+  }
+
+  bkts.forEach((b, i) => {
+    const label = document.createElementNS(svgNS, "text");
+    label.setAttribute("x", xFor(i)); label.setAttribute("y", h - padB + 16);
+    label.setAttribute("text-anchor", "middle");
+    label.textContent = b.key;
+    svg.appendChild(label);
+  });
+
+  let anyThin = false;
+
+  seriesByUser.forEach(({ user, pts }) => {
+    const color = colorFor(user);
+    let d = "";
+    let drawing = false;
+    pts.forEach((p, i) => {
+      if (p.rate == null) { drawing = false; return; }
+      const x = xFor(i), y = yFor(p.rate);
+      d += (drawing ? "L" : "M") + x + "," + y + " ";
+      drawing = true;
+    });
+    if (d) {
+      const poly = document.createElementNS(svgNS, "path");
+      poly.setAttribute("d", d.trim());
+      poly.setAttribute("fill", "none");
+      poly.setAttribute("stroke", color);
+      poly.setAttribute("stroke-width", "2");
+      svg.appendChild(poly);
+    }
+    pts.forEach((p, i) => {
+      if (p.rate == null) return;
+      if (p.thin) anyThin = true;
+      const x = xFor(i), y = yFor(p.rate);
+      const c = document.createElementNS(svgNS, "circle");
+      c.setAttribute("cx", x); c.setAttribute("cy", y);
+      c.setAttribute("r", p.thin ? 4 : 3.2);
+      c.setAttribute("fill", p.thin ? "var(--panel)" : color);
+      c.setAttribute("stroke", color);
+      c.setAttribute("stroke-width", p.thin ? 2 : 0);
+      const title = document.createElementNS(svgNS, "title");
+      title.textContent = user + " — " + p.key + ": " + p.rate.toFixed(2) +
+        " per 100 moves (" + p.moves + " moves, " + p.games + " games)" +
+        (p.thin ? " ⚠ fewer than " + DATA.thinGamesThreshold + " games this period, noisy" : "");
+      c.appendChild(title);
+      svg.appendChild(c);
+    });
+  });
+
+  document.getElementById("trendLegend").innerHTML = users.map(u =>
+    '<span class="item"><span class="swatch" style="background:' + colorFor(u) + '"></span>' + u + '</span>'
+  ).join("");
+
+  document.getElementById("trendWarnNote").innerHTML = anyThin
+    ? '<span class="ring"></span>hollow points mark periods with fewer than ' +
+      DATA.thinGamesThreshold + ' games for that player — treat those readings as noisy.'
+    : "";
+}
+
+function render() {
+  const users = DATA.users.filter(u => state.users.has(u));
+  const cats = DATA.categories.filter(c => state.categories.has(c));
+
+  document.getElementById("summary").textContent =
+    users.length + " player" + (users.length === 1 ? "" : "s") + " · " +
+    state.phases.size + " phase" + (state.phases.size === 1 ? "" : "s") + " · " +
+    state.timeClasses.size + " time class" + (state.timeClasses.size === 1 ? "" : "es") + " · " +
+    cats.length + " mistake type" + (cats.length === 1 ? "" : "s") + " selected";
+
+  const totals = users.map(u => ({ u, r: totalRate(u), m: movesFor(u), g: gamesFor(u) }));
+  const maxR = Math.max(1, ...totals.map(t => t.r || 0));
+  const barsEl = document.getElementById("bars");
+  barsEl.innerHTML = "";
+  totals.forEach(t => {
+    const row = document.createElement("div");
+    row.className = "barrow";
+    const width = t.r == null ? 0 : (t.r / maxR * 100);
+    row.innerHTML =
+      '<div class="barlabel" title="' + t.u + ' &middot; ' + t.g + ' games">' + t.u + '</div>' +
+      '<div class="bartrack"><div class="barfill" style="width:' + width + '%"></div></div>' +
+      '<div class="barvalue">' + (t.r == null ? "–" : t.r.toFixed(2)) + '</div>';
+    barsEl.appendChild(row);
+  });
+
+  renderTrend(users);
+
+  const rateRows = cats.map(c => ({ c, vals: users.map(u => rateOf(u, c)) }));
+  rateRows.sort((a, b) => {
+    const gapA = Math.max(...a.vals.map(v => v ?? 0)) - Math.min(...a.vals.map(v => v ?? 0));
+    const gapB = Math.max(...b.vals.map(v => v ?? 0)) - Math.min(...b.vals.map(v => v ?? 0));
+    return gapB - gapA;
+  });
+
+  const table = document.getElementById("table");
+  let thead = "<thead><tr><th>mistake type</th>" + users.map(u => "<th>" + u + "</th>").join("") + "</tr></thead>";
+  let tbody = "<tbody>";
+  tbody += '<tr class="total-row"><td>ALL ERRORS</td>' +
+    totals.map(t => "<td>" + (t.r == null ? "–" : t.r.toFixed(2)) + "</td>").join("") + "</tr>";
+  rateRows.forEach(r => {
+    const numeric = r.vals.filter(v => v != null);
+    const maxV = numeric.length ? Math.max(...numeric) : null;
+    tbody += "<tr><td>" + r.c + "</td>" + r.vals.map(v => {
+      const cls = (v != null && maxV != null && v === maxV && users.length > 1) ? "maxcell" : "";
+      return '<td class="' + cls + '">' + (v == null ? "–" : v.toFixed(2)) + "</td>";
+    }).join("") + "</tr>";
+  });
+  tbody += "</tbody>";
+  table.innerHTML = thead + tbody;
+
+  const refSel = document.getElementById("refSelect");
+  if (!users.includes(state.ref)) state.ref = users[0] || DATA.users[0];
+  refSel.innerHTML = users.map(u =>
+    '<option value="' + u + '"' + (u === state.ref ? " selected" : "") + ">" + u + "</option>").join("");
+
+  const gapsEl = document.getElementById("gaps");
+  gapsEl.innerHTML = "";
+  if (users.length >= 2 && state.ref) {
+    const others = users.filter(u => u !== state.ref);
+    const gaps = cats.map(c => {
+      const refR = rateOf(state.ref, c) ?? 0;
+      const otherVals = others.map(u => rateOf(u, c)).filter(v => v != null);
+      const otherMin = otherVals.length ? Math.min(...otherVals) : 0;
+      return { c, gap: refR - otherMin };
+    }).filter(g => g.gap > 0).sort((a, b) => b.gap - a.gap).slice(0, 6);
+    if (gaps.length) {
+      const ul = document.createElement("ul");
+      gaps.forEach(g => {
+        const li = document.createElement("li");
+        li.textContent = "+" + g.gap.toFixed(2) + " per 100 moves — " + g.c;
+        ul.appendChild(li);
+      });
+      gapsEl.appendChild(ul);
+    } else {
+      gapsEl.textContent = "No positive gaps for " + state.ref + " under the current filters.";
+    }
+  } else {
+    gapsEl.textContent = "Select at least two players to see gaps.";
+  }
+}
+
+buildGroup("chk-users", DATA.users, state.users);
+buildGroup("chk-phases", DATA.phases, state.phases);
+buildGroup("chk-tc", DATA.timeClasses, state.timeClasses);
+buildGroup("chk-cats", DATA.categories, state.categories);
+wireGroupLinks("grp-users", "chk-users", DATA.users, state.users);
+wireGroupLinks("grp-phases", "chk-phases", DATA.phases, state.phases);
+wireGroupLinks("grp-tc", "chk-tc", DATA.timeClasses, state.timeClasses);
+wireGroupLinks("grp-cats", "chk-cats", DATA.categories, state.categories);
+document.getElementById("refSelect").addEventListener("change", e => { state.ref = e.target.value; render(); });
+document.getElementById("granularity").addEventListener("click", e => {
+  const btn = e.target.closest("button[data-g]");
+  if (!btn) return;
+  state.granularity = btn.dataset.g;
+  document.querySelectorAll("#granularity button").forEach(b => b.classList.toggle("active", b === btn));
+  render();
+});
+render();
+</script>
+</body>
+</html>
