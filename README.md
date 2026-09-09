@@ -1,6 +1,8 @@
 # Chess Error Tracker
 
 [![CI](https://github.com/vincvloo/Chess-Error-Tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/vincvloo/Chess-Error-Tracker/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
 Finds the mistakes you keep making, not the ones you made yesterday.
 
@@ -8,6 +10,11 @@ Per-game review tells you what went wrong in that game. This tells you what goes
 wrong in your chess. It pulls your Chess.com history, runs Stockfish over every
 position where it was your move, classifies each significant error, and keeps
 everything in a local database so the picture sharpens each time you run it.
+
+![Dashboard preview, with synthetic sample data](docs/dashboard-preview.png)
+
+*Preview from `--export-html`, shown here with made-up sample data rather than
+a real account.*
 
 ---
 
@@ -324,3 +331,31 @@ Finally, the engine's judgement is not a training plan. Stockfish will tell you 
 move loses 60 centipawns. It will not tell you that at your level that mistake is
 irrelevant compared with the piece you hung on move 12. Read the frequency
 rankings, act on the top two, ignore the rest.
+
+---
+
+## Architecture
+
+The code is a small package, `chess_tracker/`, split along its natural seams:
+
+| Module | Responsibility |
+|---|---|
+| `engine.py` | Locates a Stockfish binary on the current platform. |
+| `db.py` | SQLite schema and persistence (`open_db`, `save_game`, `already_analysed`). |
+| `chesscom.py` | The Chess.com API client: serial, cached, conditional requests. |
+| `analysis.py` | Stockfish analysis and mistake classification (`classify`, `analyse_game`). |
+| `reports.py` | Text reports and player comparisons, straight from the database. |
+| `html_export.py` | The interactive HTML dashboard, built from `templates/dashboard_template.html`. |
+| `cli.py` | Argument parsing and orchestration (the `chess-tracker` entry point). |
+
+## Running the tests
+
+```
+pip install -e ".[dev]"
+pytest
+```
+
+The suite covers the pure logic -- mistake classification, phase detection,
+schema and persistence round trips, report query building -- and the
+Chess.com client's error handling, with `requests` mocked. It needs neither
+Stockfish nor network access. CI runs it on every push and pull request.
