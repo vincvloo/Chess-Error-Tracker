@@ -13,11 +13,11 @@ TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "templates", "dashboard_template.html")
 
 
-def export_html(conn: sqlite3.Connection, users: list[str], path: str) -> int:
+def build_dashboard_data(conn: sqlite3.Connection, users: list[str]) -> dict:
     """
-    Write a self-contained, offline HTML dashboard for the given users: filter
-    by player, phase, time class and mistake category, all client-side against
-    a JSON blob embedded in the page. No server, no network calls once opened.
+    Gather everything the dashboard's client-side JS needs to render itself:
+    per-player, per-time-class, per-phase move and mistake counts, plus the
+    same two breakdowns again bucketed by calendar month for the trend chart.
 
     Rates use the same denominator convention as compare(): per 100 of that
     player's own moves within whatever phase/time-class slice is selected.
@@ -37,6 +37,14 @@ def export_html(conn: sqlite3.Connection, users: list[str], path: str) -> int:
         WHERE username IN ({placeholders}) AND time_class IS NOT NULL
         GROUP BY username, time_class
     """, users).fetchall()
+
+    present = sorted({r["username"] for r in moves_rows})
+    if not present:
+        return {
+            "users": [], "phases": phases, "timeClasses": time_classes,
+            "categories": [], "moves": {}, "counts": {}, "months": [],
+            "movesByMonth": {}, "countsByMonth": {}, "thinGamesThreshold": 100,
+        }
 
     count_rows = conn.execute(f"""
         SELECT username, time_class, phase, category, COUNT(*) AS n
@@ -66,9 +74,6 @@ def export_html(conn: sqlite3.Connection, users: list[str], path: str) -> int:
         GROUP BY username, time_class, phase, month, category
     """, users).fetchall()
 
-    present = sorted({r["username"] for r in moves_rows})
-    if not present:
-        return 0
     categories = sorted({r["category"] for r in count_rows})
 
     moves: dict = {u: {} for u in present}
@@ -102,7 +107,7 @@ def export_html(conn: sqlite3.Connection, users: list[str], path: str) -> int:
                          .setdefault(r["phase"], {})
                          .setdefault(r["month"], {})[r["category"]]) = r["n"]
 
-    data = {
+    return {
         "users": present,
         "phases": phases,
         "timeClasses": time_classes,
@@ -115,12 +120,37 @@ def export_html(conn: sqlite3.Connection, users: list[str], path: str) -> int:
         "thinGamesThreshold": 100,
     }
 
+
+def render_dashboard_html(conn: sqlite3.Connection, users: list[str]) -> tuple[str, int] | None:
+    """
+    Render the dashboard as an HTML string for the given users, or None if
+    none of them have any stored games. Shared by export_html() (writes the
+    result to a file) and the web app's live /dashboard route (serves it
+    directly) -- same data, same template, same output either way.
+    """
+    data = build_dashboard_data(conn, users)
+    if not data["users"]:
+        return None
+
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     with open(TEMPLATE_PATH, encoding="utf-8") as f:
         template = f.read()
     html = (template
             .replace("__GENERATED_AT__", generated)
             .replace("__DATA_JSON__", json.dumps(data)))
+    return html, len(data["users"])
+
+
+def export_html(conn: sqlite3.Connection, users: list[str], path: str) -> int:
+    """
+    Write a self-contained, offline HTML dashboard for the given users: filter
+    by player, phase, time class and mistake category, all client-side against
+    a JSON blob embedded in the page. No server, no network calls once opened.
+    """
+    result = render_dashboard_html(conn, users)
+    if result is None:
+        return 0
+    html, n = result
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)
-    return len(present)
+    return n
