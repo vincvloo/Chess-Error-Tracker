@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+<div class="panel">
+  <h2>Tracked users</h2>
+  {% if users %}
+  <table>
+    <thead><tr><th>User</th><th>Games</th><th>Moves</th><th>Err/100</th><th>Range</th><th></th></tr></thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>{{ u.username }}{% if u.thin_sample %} <span class="muted">(thin)</span>{% endif %}</td>
+        <td>{{ u.games }}</td>
+        <td>{{ u.moves }}</td>
+        <td>{{ "%.2f"|format(u.error_rate) }}</td>
+        <td>{{ u.first_game }} to {{ u.last_game }}</td>
+        <td><a class="button-link" href="/dashboard?users={{ u.username }}">Dashboard</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <form method="get" action="/dashboard" style="margin-top:12px">
+    <label>Compare users (comma-separated)</label>
+    <input type="text" name="users" placeholder="alice,bob"
+           value="{{ users|map(attribute='username')|join(',') }}">
+    <button type="submit">View dashboard</button>
+  </form>
+  {% else %}
+  <p class="muted">No users tracked yet. Fetch someone below to get started.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Fetch &amp; analyse</h2>
+  <form method="post" action="/jobs">
+    <label>Chess.com username(s), comma-separated</label>
+    <input type="text" name="user" required placeholder="yourname,rival1">
+    <label>Contact email (required by Chess.com)</label>
+    <input type="email" name="email" required value="{{ default_email }}">
+    <div class="row">
+      <div>
+        <label>Depth</label>
+        <input type="number" name="depth" value="{{ default_depth }}">
+      </div>
+      <div>
+        <label>Threads</label>
+        <input type="number" name="threads" value="{{ default_threads }}">
+      </div>
+      <div>
+        <label>Pause (s)</label>
+        <input type="number" step="0.1" name="pause" value="{{ default_pause }}">
+      </div>
+      <div>
+        <label>Min loss (cp)</label>
+        <input type="number" name="min_loss" value="{{ default_min_loss }}">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>Since (YYYY-MM, optional)</label>
+        <input type="text" name="since" placeholder="2026-01">
+      </div>
+      <div>
+        <label>Time class (optional)</label>
+        <select name="time_class">
+          <option value="">any</option>
+          <option value="bullet">bullet</option>
+          <option value="blitz">blitz</option>
+          <option value="rapid">rapid</option>
+          <option value="daily">daily</option>
+        </select>
+      </div>
+      <div>
+        <label>Limit new games (optional)</label>
+        <input type="number" name="limit" placeholder="">
+      </div>
+    </div>
+    <button type="submit">Start</button>
+  </form>
+</div>
+{% endblock %}

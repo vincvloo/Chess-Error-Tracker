@@ -130,6 +130,14 @@ def build_parser(config: dict | None = None) -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "serve":
+        try:
+            from .web.serve_cli import serve_main
+        except ImportError:
+            sys.exit('The web UI needs extra dependencies: pip install -e ".[web]"')
+        serve_main(sys.argv[2:])
+        return
+
     argv = sys.argv[1:]
     explicit_config = _peek_config_path(argv)
     config = load_config(explicit_config or DEFAULT_CONFIG_PATH, required=explicit_config is not None)

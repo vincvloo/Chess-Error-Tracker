@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Analysing... - Chess Error Tracker{% endblock %}
+{% block content %}
+<div class="panel">
+  <h2>Analysing</h2>
+  <p id="status-text" class="muted">Starting...</p>
+  <div style="background:var(--bg);border-radius:6px;height:10px;overflow:hidden;border:1px solid var(--border)">
+    <div id="bar" style="background:var(--accent);height:100%;width:0%;transition:width .2s"></div>
+  </div>
+  <div id="result" style="margin-top:14px"></div>
+  <button id="cancel-btn" type="button" style="background:var(--danger)">Cancel</button>
+</div>
+<script>
+const jobId = {{ job_id|tojson }};
+const statusText = document.getElementById("status-text");
+const bar = document.getElementById("bar");
+const result = document.getElementById("result");
+const cancelBtn = document.getElementById("cancel-btn");
+
+cancelBtn.addEventListener("click", () => {
+  fetch(`/api/jobs/${jobId}/cancel`, {method: "POST"});
+  cancelBtn.disabled = true;
+});
+
+function dashboardLink(users) {
+  const q = encodeURIComponent(users.join(","));
+  return `<a class="button-link" href="/dashboard?users=${q}">View dashboard</a>`;
+}
+
+async function poll() {
+  const r = await fetch(`/api/jobs/${jobId}`);
+  const s = await r.json();
+
+  if (s.state === "running" || s.state === "queued") {
+    const pct = s.current_total ? Math.round(s.current_index / s.current_total * 100) : 0;
+    bar.style.width = pct + "%";
+    statusText.textContent = s.current_user
+      ? `[${s.current_user}] analysed ${s.current_index}/${s.current_total}`
+      : "Starting...";
+    setTimeout(poll, 1000);
+    return;
+  }
+
+  cancelBtn.disabled = true;
+  if (s.state === "done") {
+    bar.style.width = "100%";
+    statusText.textContent = "Done.";
+    result.innerHTML = dashboardLink(s.users);
+  } else if (s.state === "cancelled") {
+    statusText.textContent = "Cancelled. Everything analysed so far was saved.";
+    result.innerHTML = dashboardLink(s.users);
+  } else if (s.state === "error") {
+    statusText.textContent = "Error: " + s.error;
+  }
+}
+poll();
+</script>
+{% endblock %}

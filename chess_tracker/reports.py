@@ -36,8 +36,12 @@ def _scope(user: str, time_class: str | None = None, phase: str | None = None,
     return games_where, params, mistakes_where, mistakes_params
 
 
-def list_users(conn: sqlite3.Connection) -> str:
-    """Who is in this database and how solid is each sample."""
+def user_summaries(conn: sqlite3.Connection) -> list[dict]:
+    """
+    One summary row per tracked user: games/moves stored, error rate, sample
+    depth, date range. Shared by list_users() (CLI text output) and the web
+    app's home page (a table).
+    """
     rows = conn.execute("""
         SELECT g.username,
                COUNT(*)                AS games,
@@ -47,7 +51,26 @@ def list_users(conn: sqlite3.Connection) -> str:
                MIN(g.depth)            AS min_depth
         FROM games g GROUP BY g.username ORDER BY games DESC
     """).fetchall()
-    if not rows:
+
+    summaries = []
+    for r in rows:
+        errs = conn.execute("""SELECT COUNT(*) c FROM mistakes
+            WHERE username = ? AND severity IN ('mistake','blunder')""",
+            (r["username"],)).fetchone()["c"]
+        rate = errs / r["moves"] * 100 if r["moves"] else 0
+        summaries.append({
+            "username": r["username"], "games": r["games"], "moves": r["moves"],
+            "error_rate": rate, "min_depth": r["min_depth"],
+            "first_game": r["first_game"], "last_game": r["last_game"],
+            "thin_sample": r["games"] < 100,
+        })
+    return summaries
+
+
+def list_users(conn: sqlite3.Connection) -> str:
+    """Who is in this database and how solid is each sample."""
+    summaries = user_summaries(conn)
+    if not summaries:
         return "No users stored yet."
 
     out = ["=" * 72,
@@ -55,15 +78,11 @@ def list_users(conn: sqlite3.Connection) -> str:
            "=" * 72,
            f"{'user':<18}{'games':>7}{'moves':>8}{'err/100':>9}{'depth':>7}  range",
            "-" * 72]
-    for r in rows:
-        errs = conn.execute("""SELECT COUNT(*) c FROM mistakes
-            WHERE username = ? AND severity IN ('mistake','blunder')""",
-            (r["username"],)).fetchone()["c"]
-        rate = errs / r["moves"] * 100 if r["moves"] else 0
-        note = "" if r["games"] >= 100 else "  (thin sample)"
-        out.append(f"{r['username']:<18}{r['games']:>7}{r['moves']:>8}"
-                   f"{rate:>9.2f}{r['min_depth']:>7}  "
-                   f"{r['first_game']} to {r['last_game']}{note}")
+    for s in summaries:
+        note = "" if not s["thin_sample"] else "  (thin sample)"
+        out.append(f"{s['username']:<18}{s['games']:>7}{s['moves']:>8}"
+                   f"{s['error_rate']:>9.2f}{s['min_depth']:>7}  "
+                   f"{s['first_game']} to {s['last_game']}{note}")
     out.append("=" * 72)
     return "\n".join(out)
 
