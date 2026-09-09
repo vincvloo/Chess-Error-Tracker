@@ -4,3 +4,4 @@ __pycache__/
 *.db
 .claude/
 dashboard.html
+*.egg-info/

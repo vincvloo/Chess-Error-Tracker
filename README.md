@@ -99,7 +99,7 @@ python chess_error_tracker.py --user YOURNAME --report-only --last-days 90
 | `--list-users` | Show every user in the database with sample size and error rate, then exit. |
 | `--compare` | Side-by-side comparison instead of per-user reports. Needs two or more users. |
 | `--email` | Contact address for the User-Agent. Required unless `--report-only`. |
-| `--db` | Database location. Defaults to `~/chess_tracker.db`. |
+| `--db` | Database location. Defaults to `chess_tracker.db` next to the script. |
 | `--engine` | Path to Stockfish. Auto-detected if omitted. |
 | `--depth` | Search depth. Default 14. See below. |
 | `--since` | Earliest month, format `YYYY-MM`. |
@@ -166,7 +166,7 @@ played, the engine's choice, your clock at that moment, and a link to the game.
 
 ## The data
 
-Everything lives in one SQLite file, `~/chess_tracker.db` by default.
+Everything lives in one SQLite file, `chess_tracker.db` next to the script by default.
 
 | Table | Contents |
 |---|---|
