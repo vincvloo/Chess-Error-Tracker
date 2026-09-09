@@ -11,12 +11,12 @@ everything in a local database so the picture sharpens each time you run it.
 
 ## Setup (Windows)
 
-**1. Create an environment and install the two dependencies**
+**1. Create an environment and install the tool**
 
 ```
 py -m venv %USERPROFILE%\.venvs\chess
 %USERPROFILE%\.venvs\chess\Scripts\activate
-pip install chess requests
+pip install -e .
 ```
 
 In PowerShell the activation line is `.\.venvs\chess\Scripts\Activate.ps1`. If
@@ -30,7 +30,7 @@ winget install Stockfish
 ```
 
 Or download the Windows AVX2 build from stockfishchess.org and unzip it to
-`C:\Tools\stockfish\`. Either works. The script finds it automatically.
+`C:\Tools\stockfish\`. Either works. The tool finds it automatically.
 
 **3. Find your Chess.com username**
 
@@ -44,7 +44,7 @@ and keyed only on the username.
 ```
 python3 -m venv ~/.venvs/chess
 source ~/.venvs/chess/bin/activate
-pip install chess requests
+pip install -e .
 
 brew install stockfish        # macOS
 sudo apt install stockfish    # Debian and Ubuntu
@@ -55,7 +55,7 @@ sudo apt install stockfish    # Debian and Ubuntu
 ## First run
 
 ```
-python chess_error_tracker.py --user YOURNAME --email you@example.com
+chess-tracker --user YOURNAME --email you@example.com
 ```
 
 The email goes into the User-Agent header. Chess.com requires a contact address
@@ -65,7 +65,7 @@ else.
 Start narrow rather than analysing years of history on the first attempt:
 
 ```
-python chess_error_tracker.py --user YOURNAME --email you@example.com ^
+chess-tracker --user YOURNAME --email you@example.com ^
     --since 2026-01 --time-class blitz --limit 50
 ```
 
@@ -76,7 +76,7 @@ already analysed stays saved.
 ## Everyday use
 
 ```
-python chess_error_tracker.py --user YOURNAME --email you@example.com
+chess-tracker --user YOURNAME --email you@example.com
 ```
 
 Same command every time. Only games it has never seen get analysed. Two HTTP
@@ -85,8 +85,8 @@ requests, then whatever new games you have played.
 Reading the report without touching the network or the engine is instant:
 
 ```
-python chess_error_tracker.py --user YOURNAME --report-only
-python chess_error_tracker.py --user YOURNAME --report-only --last-days 90
+chess-tracker --user YOURNAME --report-only
+chess-tracker --user YOURNAME --report-only --last-days 90
 ```
 
 ---
@@ -236,7 +236,7 @@ after that makes two.
 turn, in one pass, sharing a single engine process:
 
 ```
-python chess_error_tracker.py --user me,rival1,rival2 --email you@example.com
+chess-tracker --user me,rival1,rival2 --email you@example.com
 ```
 
 Run the same command again later and each person gets only their own new games.
@@ -248,19 +248,19 @@ each player's own side of the board. Their mistakes stay separate.
 To see who is in the database and whether each sample is large enough to trust:
 
 ```
-python chess_error_tracker.py --user me --list-users
+chess-tracker --user me --list-users
 ```
 
 Every report is already per user. With several names, you get one report each:
 
 ```
-python chess_error_tracker.py --user me,rival1 --report-only
+chess-tracker --user me,rival1 --report-only
 ```
 
 ### Comparing
 
 ```
-python chess_error_tracker.py --user me,rival1,rival2 --report-only --compare
+chess-tracker --user me,rival1,rival2 --report-only --compare
 ```
 
 Rates are per 100 of that player's own moves, so unequal sample sizes stay
@@ -277,7 +277,7 @@ ones, which turns "make fewer mistakes" into "stop making the expensive ones".
 Filters apply to comparisons too, and comparing like with like matters:
 
 ```
-python chess_error_tracker.py --user me,rival1 --report-only --compare --time-class blitz
+chess-tracker --user me,rival1 --report-only --compare --time-class blitz
 ```
 
 Public and reasonable to use are not the same thing. Benchmarking against a few
