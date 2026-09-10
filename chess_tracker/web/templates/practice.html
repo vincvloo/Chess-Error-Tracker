@@ -5,9 +5,9 @@
 .practicehead { display: flex; justify-content: space-between; align-items: baseline;
   flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .practicehead .muted { font-size: 12.5px; }
-.board { display: grid; grid-template-columns: repeat(8, 1fr); width: 100%; max-width: 420px;
-  aspect-ratio: 1; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
-  margin: 0 auto; }
+.board { display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
+  width: 100%; max-width: 420px; aspect-ratio: 1; border: 1px solid var(--border);
+  border-radius: 6px; overflow: hidden; margin: 0 auto; }
 .sq { display: flex; align-items: center; justify-content: center; font-size: min(6vw, 34px);
   cursor: pointer; user-select: none; position: relative; }
 .sq.light { background: #EDE6D9; }
@@ -29,8 +29,8 @@
 #feedback.alsofine { color: #c9a227; }
 #feedback.wrong { color: var(--danger); }
 #feedback.thinking { color: var(--muted); font-style: italic; }
-.practicenav { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
-.practicenav button, .practicenav a.button-link { margin-top: 0; }
+.practicenav { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; align-items: center; }
+.practicenav > * { margin-top: 0; }
 .ownertag { font-weight: 600; color: var(--accent); }
 .extendprompt { margin-top: 14px; padding: 10px 12px; background: var(--accent-soft);
   border-radius: 8px; font-size: 12.5px; }
@@ -47,6 +47,7 @@
 
 {% elif pickCategory %}
 <div class="panel">
+  <div class="backnav"><a href="/">&larr; Home</a></div>
   <h2>{{ username }} &mdash; what do you want to work on?</h2>
   {% if categories %}
   <table>
@@ -68,6 +69,10 @@
 
 {% else %}
 <div class="panel">
+  <div class="backnav">
+    <a href="/">&larr; Home</a> &middot;
+    <a href="/practice?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}">Change category</a>
+  </div>
   <div class="practicehead">
     <div>
       <h2 style="margin:0">{{ username }} &mdash; position {{ data.queuePosition }} of {{ data.queueTotal }}</h2>
@@ -75,7 +80,7 @@
         &middot; -{{ data.cpLoss }}cp &middot; {{ data.category }}
         {% if data.owner != username %} &middot; <span class="ownertag">@{{ data.owner }}</span>{% endif %}</div>
     </div>
-    <a class="button-link" href="{{ data.gameUrl }}" target="_blank" rel="noopener noreferrer">Game</a>
+    <a class="navlink" href="{{ data.gameUrl }}" target="_blank" rel="noopener noreferrer">View game &#8599;</a>
   </div>
 
   <div class="board" id="board"></div>
@@ -89,9 +94,9 @@
   <div id="feedback"></div>
 
   <div class="practicenav">
-    <button type="button" id="resetBtn">Try again</button>
-    {% if data.prevId %}<a class="button-link" href="/practice/{{ data.prevId }}?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}&category={{ data.categoryFilter|default('') }}{% if data.extended %}&extend=1{% endif %}">&larr; Previous</a>{% endif %}
-    {% if data.nextId %}<a class="button-link" id="nextLink" href="/practice/{{ data.nextId }}?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}&category={{ data.categoryFilter|default('') }}{% if data.extended %}&extend=1{% endif %}">Next position &rarr;</a>{% else %}<span class="muted">That's the last one in this queue.</span>{% endif %}
+    <button type="button" id="resetBtn" class="btn-secondary">Try again</button>
+    {% if data.prevId %}<a class="btn-secondary" href="/practice/{{ data.prevId }}?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}&category={{ data.categoryFilter|default('') }}{% if data.extended %}&extend=1{% endif %}">&larr; Previous</a>{% endif %}
+    {% if data.nextId %}<a class="btn" id="nextLink" href="/practice/{{ data.nextId }}?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}&category={{ data.categoryFilter|default('') }}{% if data.extended %}&extend=1{% endif %}">Next position &rarr;</a>{% else %}<span class="muted">That's the last one in this queue.</span>{% endif %}
   </div>
 
   {% if data.nearEnd %}
