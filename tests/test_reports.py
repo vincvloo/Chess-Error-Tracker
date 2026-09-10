@@ -4,9 +4,11 @@ from chess_tracker.db import open_db, save_game
 from chess_tracker.reports import (
     CLOCK_BUCKET_SQL_CASE,
     MOVE_BUCKET_SQL_CASE,
+    PRACTICE_QUEUE_LIMIT,
     _scope,
     clock_bucket,
     move_bucket,
+    practice_queue,
     report,
     report_model,
 )
@@ -397,3 +399,71 @@ def test_report_golden():
         save_game(conn, g, game_mistakes, depth=14)
 
     assert report(conn, "alice") == _GOLDEN_REPORT
+
+
+# ---- practice_queue() -------------------------------------------------
+
+def test_practice_queue_orders_worst_first_then_recency_then_id():
+    conn = open_db(":memory:")
+    save_game(conn, _game("https://x/g1"), [
+        _mistake("https://x/g1", cp_loss=150, move_number=1, category="a"),
+        _mistake("https://x/g1", cp_loss=2000, end_time=2000, date="2024-01-02",
+                 move_number=2, category="a"),
+        _mistake("https://x/g1", cp_loss=2000, end_time=1000, date="2024-01-01",
+                 move_number=3, category="a"),
+        _mistake("https://x/g1", cp_loss=2000, end_time=1000, date="2024-01-01",
+                 move_number=4, category="a"),
+    ], depth=14)
+
+    queue = practice_queue(conn, "alice")
+    move_numbers = [m["move_number"] for m in queue]
+    # move 2: highest cp_loss and latest end_time, wins outright.
+    # moves 3 and 4 tie on cp_loss and end_time; higher id (move 4, inserted
+    # later) wins the tiebreak. Move 1's lower cp_loss puts it last.
+    assert move_numbers == [2, 4, 3, 1]
+
+
+def test_practice_queue_excludes_inaccuracy_and_respects_scope():
+    conn = open_db(":memory:")
+    save_game(conn, _game("https://x/g1", time_class="blitz"), [
+        _mistake("https://x/g1", time_class="blitz", phase="opening",
+                 severity="inaccuracy", cp_loss=2000, move_number=1),
+        _mistake("https://x/g1", time_class="blitz", phase="opening",
+                 severity="blunder", cp_loss=900, move_number=2),
+        _mistake("https://x/g1", time_class="blitz", phase="endgame",
+                 severity="blunder", cp_loss=2000, move_number=3),
+    ], depth=14)
+    save_game(conn, _game("https://x/g2", time_class="rapid"), [
+        _mistake("https://x/g2", time_class="rapid", phase="opening",
+                 severity="blunder", cp_loss=2000, move_number=4),
+    ], depth=14)
+
+    all_blitz = practice_queue(conn, "alice", time_class="blitz")
+    assert [m["move_number"] for m in all_blitz] == [3, 2]  # inaccuracy excluded
+
+    blitz_opening = practice_queue(conn, "alice", time_class="blitz", phase="opening")
+    assert [m["move_number"] for m in blitz_opening] == [2]
+
+    rapid = practice_queue(conn, "alice", time_class="rapid")
+    assert [m["move_number"] for m in rapid] == [4]
+
+
+def test_practice_queue_respects_the_limit():
+    conn = open_db(":memory:")
+    save_game(conn, _game("https://x/g1", moves=1000, om=1000, mm=0, em=0), [
+        _mistake("https://x/g1", cp_loss=2000 - i, move_number=i + 1, category="a")
+        for i in range(PRACTICE_QUEUE_LIMIT + 20)
+    ], depth=14)
+
+    queue = practice_queue(conn, "alice")
+    assert len(queue) == PRACTICE_QUEUE_LIMIT
+    # still the globally worst ones, not an arbitrary truncation
+    assert [m["move_number"] for m in queue] == list(range(1, PRACTICE_QUEUE_LIMIT + 1))
+
+
+def test_practice_queue_empty_for_a_user_with_no_serious_mistakes():
+    conn = open_db(":memory:")
+    save_game(conn, _game("https://x/g1"), [
+        _mistake("https://x/g1", severity="inaccuracy", cp_loss=60, move_number=1),
+    ], depth=14)
+    assert practice_queue(conn, "alice") == []

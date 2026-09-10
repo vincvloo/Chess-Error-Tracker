@@ -27,6 +27,7 @@ CLOCK_BUCKET_LABELS = ("under 30s left", "30 to 60s left", "over 60s left")
 ECO_MIN_GAMES = 3
 ECO_TOP_N = 8
 TOP_POSITIONS = 10
+PRACTICE_QUEUE_LIMIT = 100
 TIME_PRESSURE_ALERT = 0.30  # fraction of clocked errors under the first bucket
 TREND_MIN_MONTHS = 2
 DELTA_EPSILON = 0.05  # per-100-moves change below this counts as "flat"
@@ -227,6 +228,25 @@ def bar(n: int, total: int, width: int = 28) -> str:
     return "#" * filled + "." * (width - filled)
 
 
+def practice_queue(conn: sqlite3.Connection, user: str, time_class: str | None = None,
+                    phase: str | None = None) -> list[sqlite3.Row]:
+    """
+    Mistakes ordered for practice: worst first, then most recent among ties,
+    then a stable id -- the same total order as "positions to review" in the
+    terminal report and dashboard, capped at PRACTICE_QUEUE_LIMIT rather than
+    TOP_POSITIONS. report_model() calls this directly (see below) so the
+    ordering lives in exactly one place -- a SQL ORDER BY here, not a
+    separately maintained Python sort key.
+    """
+    u = user.lower()
+    _, _, mistakes_where, mistakes_params = _scope(u, time_class, phase)
+    return conn.execute(
+        f"SELECT * FROM mistakes {mistakes_where} "
+        f"AND severity IN ({','.join('?' * len(SERIOUS))}) "
+        f"ORDER BY cp_loss DESC, end_time DESC, id DESC LIMIT ?",
+        [*mistakes_params, *SERIOUS, PRACTICE_QUEUE_LIMIT]).fetchall()
+
+
 def report_model(conn: sqlite3.Connection, user: str, time_class: str | None = None,
                   last_days: int | None = None, phase: str | None = None) -> dict | None:
     """
@@ -340,9 +360,7 @@ def report_model(conn: sqlite3.Connection, user: str, time_class: str | None = N
     openings = sorted(((k, n, e) for k, (e, n) in frequent.items()),
                       key=lambda row: -row[2] / row[1])[:ECO_TOP_N]
 
-    # Worst first, then most recent among ties, then a stable id.
-    top = sorted(serious,
-                key=lambda m: (-m["cp_loss"], -m["end_time"], -m["id"]))[:TOP_POSITIONS]
+    top = practice_queue(conn, user, time_class, phase)[:TOP_POSITIONS]
     positions = [{**dict(m), "occurrences": cat_counts[m["category"]]} for m in top]
 
     return {

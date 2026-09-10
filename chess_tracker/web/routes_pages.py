@@ -1,10 +1,11 @@
 """HTML page routes: home (tracked users + start-analysis form), job
-progress, and the live dashboard."""
+progress, the live dashboard, and practice mode."""
 
 from __future__ import annotations
 
 import os
 
+import chess
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -14,7 +15,7 @@ from ..cli import DEFAULT_CONFIG_PATH, load_config
 from ..db import open_db
 from ..engine import ENGINE_HELP, find_engine
 from ..html_export import render_dashboard_html
-from ..reports import user_summaries
+from ..reports import practice_queue, user_summaries
 from .jobs import JobAlreadyRunningError
 
 router = APIRouter()
@@ -112,3 +113,61 @@ def dashboard(request: Request, users: str = ""):
         return HTMLResponse("<p>No stored games for these users yet.</p>")
     html, _ = result
     return HTMLResponse(html)
+
+
+@router.get("/practice", response_class=HTMLResponse)
+@router.get("/practice/{mistake_id}", response_class=HTMLResponse)
+def practice_page(request: Request, mistake_id: int | None = None, users: str = "",
+                  tc: str = "", phase: str = ""):
+    """
+    A queue of stored mistakes to try again, worst-then-most-recent first
+    (practice_queue()), for exactly one player. Reachable either from the
+    dashboard's "Positions to review" panel (a specific `mistake_id`) or the
+    home page's per-user "Practice" link (no id -> the queue's first entry).
+    """
+    user = next((u.strip() for u in users.split(",") if u.strip()), None)
+    if not user:
+        return HTMLResponse("<p>No user selected.</p>", status_code=400)
+
+    conn = open_db(request.app.state.db_path)
+    try:
+        queue = practice_queue(conn, user, time_class=tc or None, phase=phase or None)
+    finally:
+        conn.close()
+
+    if not queue:
+        return templates.TemplateResponse(request, "practice.html",
+            {"empty": True, "username": user})
+
+    if mistake_id is None:
+        index = 0
+    else:
+        index = next((i for i, m in enumerate(queue) if m["id"] == mistake_id), None)
+        if index is None:
+            return HTMLResponse(
+                "<p>That position isn't in this player's practice queue right now "
+                "(it may be outside the current filter, or not among the worst "
+                f"{len(queue)}).</p>", status_code=404)
+
+    row = queue[index]
+    board = chess.Board(row["fen"])
+    legal_moves = [m.uci() for m in board.legal_moves]
+
+    data = {
+        "mistakeId": row["id"],
+        "fen": row["fen"],
+        "colour": row["my_colour"],
+        "moveNumber": row["move_number"],
+        "phase": row["phase"],
+        "category": row["category"],
+        "cpLoss": row["cp_loss"],
+        "gameUrl": row["game_url"],
+        "legalMoves": legal_moves,
+        "queuePosition": index + 1,
+        "queueTotal": len(queue),
+        "nextId": queue[index + 1]["id"] if index + 1 < len(queue) else None,
+        "prevId": queue[index - 1]["id"] if index > 0 else None,
+        "users": user, "tc": tc, "phaseFilter": phase,
+    }
+    return templates.TemplateResponse(request, "practice.html",
+        {"empty": False, "username": user, "data": data})
