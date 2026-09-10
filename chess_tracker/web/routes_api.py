@@ -3,12 +3,48 @@
 from __future__ import annotations
 
 import chess
+import chess.engine
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from ..analysis import MISTAKE, score_cp
 from ..db import open_db
 
 router = APIRouter(prefix="/api")
+
+# Depth for the live engine check on a practice-mode attempt. A plain
+# constant here, not read from config -- this is a quick interactive check,
+# not the archival analysis depth used when fetching games.
+PRACTICE_JUDGE_DEPTH = 14
+
+
+def _judge_with_engine(engine_path: str | None, board_before: chess.Board,
+                       move: chess.Move) -> tuple[str, int | None]:
+    """
+    Whether a move that doesn't match the stored `best` was still fine or a
+    real mistake, using the same cp_loss/MISTAKE yardstick as everywhere
+    else in the app. Falls back to a flat "mistake" verdict (no cp_loss) if
+    no engine is available or it fails -- practice mode must keep working
+    with no Stockfish installed, same as phase 3.
+    """
+    if not engine_path:
+        return "mistake", None
+
+    limit = chess.engine.Limit(depth=PRACTICE_JUDGE_DEPTH)
+    try:
+        with chess.engine.SimpleEngine.popen_uci(engine_path) as engine:
+            info_before = engine.analyse(board_before, limit)
+            cp_before = score_cp(info_before, board_before.turn)
+
+            board_after = board_before.copy()
+            board_after.push(move)
+            info_after = engine.analyse(board_after, limit)
+            cp_after = score_cp(info_after, board_before.turn)
+    except (chess.engine.EngineError, OSError):
+        return "mistake", None
+
+    cp_loss = cp_before - cp_after
+    return ("also_fine" if cp_loss < MISTAKE else "mistake"), cp_loss
 
 
 @router.get("/jobs/{job_id}")
@@ -65,11 +101,21 @@ async def practice_attempt(request: Request, mistake_id: int):
     best_board = board.copy()
     best_board.push(best_board.parse_san(row["best"]))
 
-    return {
+    result = {
         "legal": True,
-        "correct": your_san == row["best"],
         "yourSan": your_san,
         "bestSan": row["best"],
         "yourFen": your_board.fen(),
         "bestFen": best_board.fen(),
     }
+
+    if your_san == row["best"]:
+        result["verdict"] = "best"
+    else:
+        verdict, your_cp_loss = _judge_with_engine(
+            request.app.state.engine_path, board, move)
+        result["verdict"] = verdict
+        result["yourCpLoss"] = your_cp_loss
+
+    result["correct"] = result["verdict"] == "best"  # kept for older clients
+    return result

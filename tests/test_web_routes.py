@@ -1,3 +1,6 @@
+from unittest.mock import MagicMock
+
+import chess
 from fastapi.testclient import TestClient
 
 from chess_tracker.db import open_db, save_game
@@ -82,7 +85,15 @@ def test_practice_page_renders_position_without_revealing_best_move(tmp_path):
     assert "alice" in r.text
     assert _START_FEN in r.text
     assert '"e2e4"' in r.text  # part of the embedded legal-move list
-    assert '"best"' not in r.text and ">e4<" not in r.text  # the answer itself is never sent
+
+    # The no-peeking guarantee is about the embedded DATA payload
+    # specifically -- not the whole page, which legitimately contains the
+    # word "best" in unrelated client-side JS (e.g. the "best"/"also_fine"/
+    # "mistake" verdict labels used once a move has actually been attempted).
+    data_blob = r.text[r.text.index("const DATA = ") : r.text.index("const MISTAKE_ID")]
+    assert '"best"' not in data_blob
+    assert '"e4"' not in data_blob  # the answer SAN itself, not a substring of "e2e4" etc.
+    assert ">e4<" not in r.text  # never rendered as visible page text either
 
 
 def test_practice_page_with_no_id_resolves_to_the_queue_first_entry(tmp_path):
@@ -121,20 +132,72 @@ def test_practice_attempt_correct_move(tmp_path):
     assert r.status_code == 200
     body = r.json()
     assert body == {
-        "legal": True, "correct": True, "yourSan": "e4", "bestSan": "e4",
+        "legal": True, "verdict": "best", "correct": True,
+        "yourSan": "e4", "bestSan": "e4",
         "yourFen": body["yourFen"], "bestFen": body["yourFen"],
     }
 
 
-def test_practice_attempt_legal_but_wrong_move(tmp_path):
+def test_practice_attempt_legal_but_wrong_move_with_no_engine_available(tmp_path):
+    # create_app() here is given no engine_path, matching a machine with no
+    # Stockfish installed -- practice mode must still work, just without the
+    # engine-backed "also fine" nuance.
     client = TestClient(create_app(_practice_seeded_db(tmp_path)))
     r = client.post("/api/practice/1/attempt", json={"from": "d2", "to": "d4"})
     assert r.status_code == 200
     body = r.json()
     assert body["legal"] is True
+    assert body["verdict"] == "mistake"
     assert body["correct"] is False
+    assert body["yourCpLoss"] is None
     assert body["yourSan"] == "d4"
     assert body["bestSan"] == "e4"
+
+
+def _mock_engine_with_scores(mover_relative_before, mover_relative_after):
+    """A stand-in SimpleEngine whose .analyse() returns the given scores in
+    order, each relative to whichever side was to move in that position --
+    exactly like a real engine's output, so score_cp() needs no changes to
+    consume it."""
+    import chess.engine as _e
+
+    engine = MagicMock()
+    engine.__enter__.return_value = engine
+    engine.analyse.side_effect = [
+        {"score": _e.PovScore(_e.Cp(mover_relative_before), chess.WHITE)},
+        {"score": _e.PovScore(_e.Cp(mover_relative_after), chess.BLACK)},
+    ]
+    return engine
+
+
+def test_practice_attempt_also_fine_when_engine_says_move_is_close(tmp_path, monkeypatch):
+    app = create_app(_practice_seeded_db(tmp_path), engine_path="fake-stockfish")
+    # white +30 before Nf3; after Nf3 (black to move), still +25 for white
+    # relative to black as mover that's -25 -- a 5cp loss, well under MISTAKE.
+    monkeypatch.setattr("chess.engine.SimpleEngine.popen_uci",
+                        lambda *a, **k: _mock_engine_with_scores(30, -25))
+    client = TestClient(app)
+    r = client.post("/api/practice/1/attempt", json={"from": "g1", "to": "f3"})
+    body = r.json()
+    assert body["legal"] is True
+    assert body["verdict"] == "also_fine"
+    assert body["correct"] is False
+    assert body["yourCpLoss"] == 5
+
+
+def test_practice_attempt_mistake_when_engine_says_move_is_bad(tmp_path, monkeypatch):
+    app = create_app(_practice_seeded_db(tmp_path), engine_path="fake-stockfish")
+    # white +30 before Nf3; after Nf3, +170 relative to black as mover means
+    # -170 for white -- a 200cp loss, well over MISTAKE.
+    monkeypatch.setattr("chess.engine.SimpleEngine.popen_uci",
+                        lambda *a, **k: _mock_engine_with_scores(30, 170))
+    client = TestClient(app)
+    r = client.post("/api/practice/1/attempt", json={"from": "g1", "to": "f3"})
+    body = r.json()
+    assert body["legal"] is True
+    assert body["verdict"] == "mistake"
+    assert body["correct"] is False
+    assert body["yourCpLoss"] == 200
 
 
 def test_practice_attempt_illegal_move(tmp_path):
