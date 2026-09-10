@@ -15,7 +15,8 @@
         <td>{{ u.moves }}</td>
         <td>{{ "%.2f"|format(u.error_rate) }}</td>
         <td>{{ u.first_game }} to {{ u.last_game }}</td>
-        <td><a class="button-link" href="/dashboard?users={{ u.username }}">Dashboard</a></td>
+        <td><a class="button-link" href="/dashboard?users={{ u.username }}">Dashboard</a>
+          &nbsp;<a class="button-link" href="/practice?users={{ u.username }}">Practice</a></td>
       </tr>
       {% endfor %}
     </tbody>

@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+{% block title %}Practice - Chess Error Tracker{% endblock %}
+{% block head %}
+<style>
+.practicehead { display: flex; justify-content: space-between; align-items: baseline;
+  flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.practicehead .muted { font-size: 12.5px; }
+.board { display: grid; grid-template-columns: repeat(8, 1fr); width: 100%; max-width: 420px;
+  aspect-ratio: 1; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+  margin: 0 auto; }
+.sq { display: flex; align-items: center; justify-content: center; font-size: min(6vw, 34px);
+  cursor: pointer; user-select: none; position: relative; }
+.sq.light { background: #EDE6D9; }
+.sq.dark { background: #9C7A5A; }
+@media (prefers-color-scheme: dark) {
+  .sq.light { background: #3a3b40; }
+  .sq.dark { background: #232427; }
+}
+.sq.selected { outline: 3px solid var(--accent); outline-offset: -3px; }
+.sq.target::after { content: ""; position: absolute; width: 28%; height: 28%; border-radius: 50%;
+  background: var(--accent); opacity: 0.55; }
+.sq.white-piece { color: #f5f5f5; text-shadow: 0 0 2px #000, 0 0 1px #000; }
+.sq.black-piece { color: #111; text-shadow: 0 0 2px #fff8, 0 0 1px #fff8; }
+.promo { display: none; justify-content: center; gap: 8px; margin: 10px 0; }
+.promo.show { display: flex; }
+.promo button { margin-top: 0; }
+#feedback { margin: 12px 0; font-size: 13.5px; min-height: 1.5em; }
+#feedback.correct { color: #3fa66f; }
+#feedback.wrong { color: var(--danger); }
+.practicenav { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.practicenav button, .practicenav a.button-link { margin-top: 0; }
+</style>
+{% endblock %}
+{% block content %}
+{% if empty %}
+<div class="panel">
+  <h2>Practice</h2>
+  <p class="muted">No stored mistakes to practice for {{ username }} under this filter.</p>
+  <a class="button-link" href="/">Back home</a>
+</div>
+{% else %}
+<div class="panel">
+  <div class="practicehead">
+    <div>
+      <h2 style="margin:0">{{ username }} &mdash; position {{ data.queuePosition }} of {{ data.queueTotal }}</h2>
+      <div class="muted">move {{ data.moveNumber }}, {{ data.phase }}, {{ data.colour }} to move
+        &middot; -{{ data.cpLoss }}cp &middot; {{ data.category }}</div>
+    </div>
+    <a class="button-link" href="{{ data.gameUrl }}" target="_blank" rel="noopener noreferrer">Game</a>
+  </div>
+
+  <div class="board" id="board"></div>
+  <div class="promo" id="promo">
+    <span class="muted">Promote to:</span>
+    <button type="button" data-p="q">Q</button>
+    <button type="button" data-p="r">R</button>
+    <button type="button" data-p="b">B</button>
+    <button type="button" data-p="n">N</button>
+  </div>
+  <div id="feedback"></div>
+
+  <div class="practicenav">
+    <button type="button" id="resetBtn">Try again</button>
+    {% if data.prevId %}<a class="button-link" href="/practice/{{ data.prevId }}?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}">&larr; Previous</a>{% endif %}
+    {% if data.nextId %}<a class="button-link" id="nextLink" href="/practice/{{ data.nextId }}?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}">Next position &rarr;</a>{% else %}<span class="muted">That's the last one in this queue.</span>{% endif %}
+  </div>
+</div>
+
+<script>
+const DATA = {{ data | tojson }};
+const MISTAKE_ID = DATA.mistakeId;
+
+const PIECE_GLYPH = {
+  P: "♙", N: "♘", B: "♗", R: "♖", Q: "♕", K: "♔",
+  p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
+};
+const FILES = "abcdefgh".split("");
+
+function parseFenBoard(fen) {
+  const placement = fen.split(" ")[0];
+  const ranks = placement.split("/"); // ranks[0] is rank 8
+  const board = {};
+  ranks.forEach((rankStr, i) => {
+    const rank = 8 - i;
+    let file = 0;
+    for (const ch of rankStr) {
+      if (/[1-8]/.test(ch)) {
+        file += parseInt(ch, 10);
+      } else {
+        board[FILES[file] + rank] = ch;
+        file += 1;
+      }
+    }
+  });
+  return board;
+}
+
+function sideToMove(fen) {
+  return fen.split(" ")[1] === "b" ? "black" : "white";
+}
+
+let currentFen = DATA.fen;
+let selected = null;
+let attempted = false;
+let pendingTarget = null; // {from, to} awaiting a promotion choice
+
+function squareEl(sq) {
+  return document.querySelector('.sq[data-square="' + sq + '"]');
+}
+
+function clearHighlights() {
+  document.querySelectorAll(".sq.selected, .sq.target").forEach(el => {
+    el.classList.remove("selected", "target");
+  });
+}
+
+function drawBoard(fen) {
+  const board = parseFenBoard(fen);
+  const boardEl = document.getElementById("board");
+  boardEl.innerHTML = "";
+  const flip = DATA.colour === "black";
+  const dispFiles = flip ? [...FILES].reverse() : FILES;
+  const dispRanks = flip ? [1, 2, 3, 4, 5, 6, 7, 8] : [8, 7, 6, 5, 4, 3, 2, 1];
+  dispRanks.forEach(rank => {
+    dispFiles.forEach(file => {
+      const sq = file + rank;
+      const div = document.createElement("div");
+      const light = (FILES.indexOf(file) + rank) % 2 === 0;
+      div.className = "sq " + (light ? "light" : "dark");
+      div.dataset.square = sq;
+      const piece = board[sq];
+      if (piece) {
+        div.textContent = PIECE_GLYPH[piece];
+        div.classList.add(piece === piece.toUpperCase() ? "white-piece" : "black-piece");
+      }
+      div.addEventListener("click", () => onSquareClick(sq));
+      boardEl.appendChild(div);
+    });
+  });
+}
+
+function onSquareClick(sq) {
+  if (attempted) return;
+  const board = parseFenBoard(currentFen);
+  const mover = sideToMove(currentFen);
+
+  if (!selected) {
+    const piece = board[sq];
+    if (!piece) return;
+    const isMoversPiece = mover === "white" ? piece === piece.toUpperCase()
+                                            : piece === piece.toLowerCase();
+    if (!isMoversPiece) return;
+    selected = sq;
+    clearHighlights();
+    squareEl(sq).classList.add("selected");
+    DATA.legalMoves.filter(u => u.slice(0, 2) === sq).forEach(u => {
+      const t = squareEl(u.slice(2, 4));
+      if (t) t.classList.add("target");
+    });
+    return;
+  }
+
+  if (sq === selected) {
+    selected = null;
+    clearHighlights();
+    return;
+  }
+
+  const piece = board[sq];
+  const isMoversPiece = piece && (mover === "white" ? piece === piece.toUpperCase()
+                                                     : piece === piece.toLowerCase());
+  const candidates = DATA.legalMoves.filter(u => u.slice(0, 2) === selected && u.slice(2, 4) === sq);
+  if (!candidates.length) {
+    if (isMoversPiece) {
+      selected = sq;
+      clearHighlights();
+      squareEl(sq).classList.add("selected");
+      DATA.legalMoves.filter(u => u.slice(0, 2) === sq).forEach(u => {
+        const t = squareEl(u.slice(2, 4));
+        if (t) t.classList.add("target");
+      });
+    } else {
+      selected = null;
+      clearHighlights();
+    }
+    return;
+  }
+
+  if (candidates.length > 1) {
+    pendingTarget = { from: selected, to: sq };
+    document.getElementById("promo").classList.add("show");
+    return;
+  }
+
+  submitAttempt(selected, sq, null);
+}
+
+document.getElementById("promo").addEventListener("click", e => {
+  const btn = e.target.closest("button[data-p]");
+  if (!btn || !pendingTarget) return;
+  document.getElementById("promo").classList.remove("show");
+  submitAttempt(pendingTarget.from, pendingTarget.to, btn.dataset.p);
+  pendingTarget = null;
+});
+
+async function submitAttempt(from, to, promotion) {
+  attempted = true;
+  clearHighlights();
+  const r = await fetch("/api/practice/" + MISTAKE_ID + "/attempt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ from, to, promotion }),
+  });
+  const result = await r.json();
+  const feedback = document.getElementById("feedback");
+
+  if (!result.legal) {
+    feedback.textContent = "That move isn't legal here — try again.";
+    feedback.className = "";
+    attempted = false;
+    selected = null;
+    return;
+  }
+
+  if (result.correct) {
+    feedback.textContent = "Correct! " + result.yourSan + " was the best move.";
+    feedback.className = "correct";
+  } else {
+    feedback.textContent = "You played " + result.yourSan + " — the best move was " + result.bestSan + ".";
+    feedback.className = "wrong";
+  }
+  currentFen = result.correct ? result.yourFen : result.bestFen;
+  selected = null;
+  drawBoard(currentFen);
+}
+
+document.getElementById("resetBtn").addEventListener("click", () => {
+  attempted = false;
+  selected = null;
+  pendingTarget = null;
+  document.getElementById("promo").classList.remove("show");
+  document.getElementById("feedback").textContent = "";
+  document.getElementById("feedback").className = "";
+  currentFen = DATA.fen;
+  drawBoard(currentFen);
+});
+
+drawBoard(currentFen);
+</script>
+{% endif %}
+{% endblock %}

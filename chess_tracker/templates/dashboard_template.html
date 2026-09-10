@@ -89,6 +89,7 @@ svg.trend .empty { fill: var(--muted); font-size: 12.5px; }
 .poscat { margin-top: 2px; }
 .poslink { color: var(--accent); text-decoration: none; word-break: break-all; }
 .poslink:hover { text-decoration: underline; }
+.practicelink { display: block; margin-top: 3px; font-weight: 600; }
 .openrow { display: grid; grid-template-columns: 60px 1fr 70px; gap: 8px; align-items: center;
   font-size: 12.5px; margin: 3px 0; }
 </style>
@@ -700,7 +701,7 @@ function renderPositions(sel, users) {
     h3.textContent = user;
     list.appendChild(h3);
     top.forEach(row => {
-      const [, , , , cat, cpLoss, , , date, moveNumber, played, best, clockSeconds, gameUrl] = row;
+      const [, tc, ph, , cat, cpLoss, , mistakeId, date, moveNumber, played, best, clockSeconds, gameUrl] = row;
       const occurrences = sumFacts(DATA.countFacts,
         withOverride(uSel, { category: new Set([cat]) }));
       const posrow = document.createElement("div");
@@ -726,9 +727,16 @@ function renderPositions(sel, users) {
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.textContent = gameUrl;
+      const practiceLink = document.createElement("a");
+      practiceLink.className = "poslink practicelink";
+      practiceLink.href = "/practice/" + mistakeId + "?users=" + encodeURIComponent(user) +
+        "&tc=" + encodeURIComponent(DATA.lists.timeClasses[tc]) +
+        "&phase=" + encodeURIComponent(DATA.lists.phases[ph]);
+      practiceLink.textContent = "Practice this position";
       posrow.appendChild(head);
       posrow.appendChild(catLine);
       posrow.appendChild(link);
+      posrow.appendChild(practiceLink);
       list.appendChild(posrow);
     });
   });
