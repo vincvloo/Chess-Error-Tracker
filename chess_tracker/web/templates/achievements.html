@@ -8,9 +8,11 @@
   <p class="muted">No stored games for {{ username }} yet — nothing to show here until you
     <a class="navlink" href="/">Analyse</a>.</p>
   {% else %}
-  <p class="muted">Based on your analysed games ({{ n_serious }} mistakes/blunders on record).
-    Practice-session results aren't tracked yet — this is purely how your actual play has moved
-    over time.</p>
+  <p class="muted">Based on your analysed games ({{ n_serious }} mistakes/blunders on record){%
+    if practice.overall.attempted %}, and {{ practice.overall.attempted }} practice attempts so far
+    ({{ practice.overall.solved }} solved).{% else %}. Head over to
+    <a class="navlink" href="/practice?users={{ username }}">Practice</a> to start working
+    through them.{% endif %}</p>
   {% endif %}
 </div>
 
@@ -64,6 +66,71 @@
       {% endfor %}
     </tbody>
   </table>
+</div>
+
+<div class="panel">
+  <h2>Practice progress</h2>
+  {% if practice.overall.total %}
+  <p>{{ practice.overall.attempted }} of {{ practice.overall.total }} practiceable positions
+    attempted, {{ practice.overall.solved }} solved
+    ({{ "%.0f"|format(practice.overall.solved / practice.overall.total * 100) }}%).</p>
+  {% else %}
+  <p class="muted">No positions in your practice queue yet.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Solve rate by category</h2>
+  {% if practice.by_category %}
+  <table>
+    <thead><tr><th>category</th><th>yours</th><th>others</th></tr></thead>
+    <tbody>
+      {% for row in practice.by_category %}
+      <tr>
+        <td>{{ row.category }}</td>
+        <td>{% if row.own_rate is not none %}{{ "%.0f"|format(row.own_rate * 100) }}%
+          ({{ row.own_solved }}/{{ row.own_total }}){% else %}&mdash;{% endif %}</td>
+        <td>{% if row.others_rate is not none %}{{ "%.0f"|format(row.others_rate * 100) }}%
+          ({{ row.others_solved }}/{{ row.others_total }}){% else %}no data{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No categories to show yet.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Hints</h2>
+  {% if practice.hint_rate is not none %}
+  <p>{{ "%.0f"|format(practice.hint_rate * 100) }}% of your successful attempts
+    ({{ practice.hint_sample }} total) used a hint.</p>
+  {% else %}
+  <p class="muted">No successful attempts yet.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Recent practice sessions</h2>
+  {% if practice.recent %}
+  <table>
+    <thead><tr><th>when</th><th>category</th><th>source</th><th>result</th><th>hint</th></tr></thead>
+    <tbody>
+      {% for a in practice.recent %}
+      <tr>
+        <td>{{ a.created_at }}</td>
+        <td>{{ a.category }}</td>
+        <td>{{ "yours" if a.is_own else "@" + a.owner }}</td>
+        <td>{{ a.verdict }}</td>
+        <td>{{ "yes" if a.hint_used else "" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No practice attempts recorded yet.</p>
+  {% endif %}
 </div>
 {% endif %}
 {% endblock %}
