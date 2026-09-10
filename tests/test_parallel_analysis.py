@@ -22,16 +22,20 @@ in-process:
   itself with a MagicMock.
 """
 import multiprocessing
+import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from chess_tracker.analysis import INACCURACY
 from chess_tracker.analysis_runner import (
     _analyse_shard,
     _partition_games,
     _resolve_db_path,
+    _save_with_retry,
     run_analysis,
 )
 from chess_tracker.db import open_db, save_game
@@ -100,6 +104,61 @@ def test_resolve_db_path_returns_the_real_file_path(tmp_path):
     assert resolved.endswith("real.db")
 
 
+# ---- _save_with_retry --------------------------------------------------
+
+def test_save_with_retry_succeeds_immediately_when_not_locked(tmp_path):
+    conn = open_db(str(tmp_path / "t.db"))
+    rec = _fake_rec("https://x/g1", "alice")
+    ok = _save_with_retry(conn, rec, [], 14, "alice", rec["url"])
+    assert ok is True
+    assert conn.execute("SELECT COUNT(*) c FROM games").fetchone()["c"] == 1
+
+
+def test_save_with_retry_retries_transient_lock_errors_then_succeeds(tmp_path, monkeypatch):
+    conn = open_db(str(tmp_path / "t.db"))
+    rec = _fake_rec("https://x/g1", "alice")
+    monkeypatch.setattr("chess_tracker.analysis_runner.time.sleep", lambda s: None)
+
+    calls = []
+
+    def flaky_save(c, r, m, d):
+        calls.append(1)
+        if len(calls) < 3:
+            raise sqlite3.OperationalError("database is locked")
+        return save_game(c, r, m, d)
+
+    with patch("chess_tracker.analysis_runner.save_game", side_effect=flaky_save):
+        ok = _save_with_retry(conn, rec, [], 14, "alice", rec["url"])
+
+    assert ok is True
+    assert len(calls) == 3
+    assert conn.execute("SELECT COUNT(*) c FROM games").fetchone()["c"] == 1
+
+
+def test_save_with_retry_gives_up_after_exhausting_retries(tmp_path, monkeypatch):
+    conn = open_db(str(tmp_path / "t.db"))
+    rec = _fake_rec("https://x/g1", "alice")
+    monkeypatch.setattr("chess_tracker.analysis_runner.time.sleep", lambda s: None)
+
+    with patch("chess_tracker.analysis_runner.save_game",
+              side_effect=sqlite3.OperationalError("database is locked")):
+        ok = _save_with_retry(conn, rec, [], 14, "alice", rec["url"])
+
+    assert ok is False
+    assert conn.execute("SELECT COUNT(*) c FROM games").fetchone()["c"] == 0
+
+
+def test_save_with_retry_does_not_retry_a_non_lock_operational_error(tmp_path, monkeypatch):
+    conn = open_db(str(tmp_path / "t.db"))
+    rec = _fake_rec("https://x/g1", "alice")
+    monkeypatch.setattr("chess_tracker.analysis_runner.time.sleep", lambda s: None)
+
+    with patch("chess_tracker.analysis_runner.save_game",
+              side_effect=sqlite3.OperationalError("no such table: games")):
+        with pytest.raises(sqlite3.OperationalError):
+            _save_with_retry(conn, rec, [], 14, "alice", rec["url"])
+
+
 # ---- _analyse_shard (called directly, not via a process) --------------
 
 @patch("chess.engine.SimpleEngine.popen_uci")
@@ -114,10 +173,11 @@ def test_analyse_shard_saves_games_and_returns_the_count(mock_popen, tmp_path):
 
     q: multiprocessing.Queue = multiprocessing.Queue()
     with patch("chess_tracker.analysis_runner.analyse_game", side_effect=fake_analyse):
-        new = _analyse_shard(db_path, "alice", games, "/fake/stockfish", 14, 2,
-                             INACCURACY, q, 0, multiprocessing.Event())
+        new, failed = _analyse_shard(db_path, "alice", games, "/fake/stockfish", 14, 2,
+                                     INACCURACY, q, 0, multiprocessing.Event())
 
     assert new == 2
+    assert failed == []
     conn = open_db(db_path)
     assert conn.execute("SELECT COUNT(*) c FROM games WHERE username='alice'"
                         ).fetchone()["c"] == 2
@@ -161,11 +221,44 @@ def test_analyse_shard_stops_early_once_cancelled(mock_popen, tmp_path):
 
     q: multiprocessing.Queue = multiprocessing.Queue()
     with patch("chess_tracker.analysis_runner.analyse_game", side_effect=fake_analyse):
-        new = _analyse_shard(db_path, "alice", games, "/fake/stockfish", 14, 2,
-                             INACCURACY, q, 0, cancel)
+        new, failed = _analyse_shard(db_path, "alice", games, "/fake/stockfish", 14, 2,
+                                     INACCURACY, q, 0, cancel)
 
     assert new == 2
+    assert failed == []
     assert len(processed) == 2
+
+
+@patch("chess.engine.SimpleEngine.popen_uci")
+def test_analyse_shard_skips_a_game_that_never_saves_but_continues_the_rest(
+        mock_popen, tmp_path, monkeypatch):
+    mock_popen.return_value = MagicMock()
+    monkeypatch.setattr("chess_tracker.analysis_runner.time.sleep", lambda s: None)
+    db_path = str(tmp_path / "shard.db")
+    open_db(db_path).close()
+    games = [{"url": "https://x/g1"}, {"url": "https://x/g2"}, {"url": "https://x/g3"}]
+
+    def fake_analyse(game_json, user, engine, depth, min_loss):
+        return _fake_rec(game_json["url"], user), []
+
+    def flaky_save(c, rec, mistakes, depth):
+        if rec["url"] == "https://x/g2":
+            raise sqlite3.OperationalError("database is locked")
+        return save_game(c, rec, mistakes, depth)
+
+    q: multiprocessing.Queue = multiprocessing.Queue()
+    with patch("chess_tracker.analysis_runner.analyse_game", side_effect=fake_analyse), \
+         patch("chess_tracker.analysis_runner.save_game", side_effect=flaky_save):
+        new, failed = _analyse_shard(db_path, "alice", games, "/fake/stockfish", 14, 2,
+                                     INACCURACY, q, 0, multiprocessing.Event())
+
+    # The one persistently-locked game is skipped -- not lost, not fatal to
+    # the rest of the shard, which keeps going and saves g1 and g3.
+    assert new == 2
+    assert failed == ["https://x/g2"]
+    conn = open_db(db_path)
+    saved = {r["url"] for r in conn.execute("SELECT url FROM games").fetchall()}
+    assert saved == {"https://x/g1", "https://x/g3"}
 
 
 # ---- run_analysis()'s threshold/gating decision ------------------------
@@ -189,7 +282,7 @@ def test_run_analysis_stays_serial_below_the_threshold(mock_popen, mock_parallel
 def test_run_analysis_goes_parallel_above_the_threshold_with_a_real_db(
         mock_popen, mock_parallel, tmp_path):
     mock_popen.return_value = MagicMock()
-    mock_parallel.return_value = 3
+    mock_parallel.return_value = (3, [])
     games = [{"url": f"https://x/g{i}"} for i in range(5)]
     conn = open_db(str(tmp_path / "t.db"))
     with patch("chess_tracker.analysis_runner.collect_games", return_value=games):
@@ -235,7 +328,7 @@ def _fake_shard_worker(db_path, user, games, engine_path, depth, threads, min_lo
         time.sleep(delay)
         new += 1
         progress_queue.put((shard_index, i, len(games)))
-    return new
+    return new, []
 
 
 @patch("chess_tracker.analysis_runner._analyse_shard", side_effect=_fake_shard_worker)
@@ -325,3 +418,59 @@ def test_run_analysis_parallel_forwards_cancel_event_and_saves_partial_progress(
     # Each shard has 20 games at 0.05s/game (~1s to finish uncancelled) --
     # cancellation should catch all three shards well before completion.
     assert 0 < run_row["games_new"] < 60
+
+
+# ---- reporting when some games couldn't be saved -----------------------
+
+def test_run_analysis_serial_logs_a_warning_when_a_game_cannot_be_saved(
+        tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr("chess_tracker.analysis_runner.time.sleep", lambda s: None)
+    conn = open_db(str(tmp_path / "t.db"))
+    games = [{"url": "https://x/g1"}, {"url": "https://x/g2"}]
+
+    def fake_analyse(g, u, e, d, m):
+        return _fake_rec(g["url"], u), []
+
+    def flaky_save(c, rec, mistakes, depth):
+        if rec["url"] == "https://x/g2":
+            raise sqlite3.OperationalError("database is locked")
+        return save_game(c, rec, mistakes, depth)
+
+    with patch("chess.engine.SimpleEngine.popen_uci", return_value=MagicMock()), \
+         patch("chess_tracker.analysis_runner.collect_games", return_value=games), \
+         patch("chess_tracker.analysis_runner.analyse_game", side_effect=fake_analyse), \
+         patch("chess_tracker.analysis_runner.save_game", side_effect=flaky_save), \
+         caplog.at_level("WARNING"):
+        run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,
+                     threads=2, pause=0, quiet=True, parallel_threshold=10_000, workers=1)
+
+    assert "1 of 2 games could not be saved" in caplog.text
+    run_row = conn.execute("SELECT * FROM runs WHERE username='alice'").fetchone()
+    assert run_row["games_new"] == 1
+
+
+@patch("chess_tracker.analysis_runner.ProcessPoolExecutor", ThreadPoolExecutor)
+@patch("chess.engine.SimpleEngine.popen_uci")
+def test_run_analysis_parallel_logs_a_warning_when_shards_report_failed_saves(
+        mock_popen, tmp_path, caplog):
+    mock_popen.return_value = MagicMock()
+    games = [{"url": f"https://x/g{i}"} for i in range(9)]
+    conn = open_db(str(tmp_path / "t.db"))
+
+    def fake_shard_with_one_failure(db_path, user, shard_games, engine_path, depth,
+                                    threads, min_loss, progress_queue, shard_index,
+                                    cancel_event):
+        new, _ = _fake_shard_worker(db_path, user, shard_games, engine_path, depth,
+                                    threads, min_loss, progress_queue, shard_index,
+                                    cancel_event)
+        failed = [shard_games[0]["url"]] if shard_index == 0 else []
+        return new, failed
+
+    with patch("chess_tracker.analysis_runner.collect_games", return_value=games), \
+         patch("chess_tracker.analysis_runner._analyse_shard",
+              side_effect=fake_shard_with_one_failure), \
+         caplog.at_level("WARNING"):
+        run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,
+                     threads=2, pause=0, quiet=True, parallel_threshold=2, workers=3)
+
+    assert "1 of 9 games could not be saved" in caplog.text

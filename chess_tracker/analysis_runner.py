@@ -10,6 +10,7 @@ import queue
 import sqlite3
 import sys
 import threading
+import time
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from datetime import datetime, timezone
 from typing import Callable
@@ -33,18 +34,54 @@ DEFAULT_PARALLEL_THRESHOLD = 200
 # adds up on very large machines.
 DEFAULT_WORKERS = min(8, max(1, (os.cpu_count() or 2) // 2))
 
+# Backoff between retries of a single game's save after a "database is
+# locked" error -- WAL still serializes writers, so N parallel workers (or
+# the CLI running alongside the web app's own background job) can
+# occasionally exceed busy_timeout under sustained write pressure over a
+# long run. Total ~7.7s of backoff before giving up on one game, well beyond
+# the 5s busy_timeout itself, since this is specifically for the case where
+# that timeout wasn't enough.
+_SAVE_RETRY_DELAYS = (0.2, 0.5, 1.0, 2.0, 4.0)
+
+
+def _save_with_retry(conn: sqlite3.Connection, rec, mistakes, depth: int,
+                     user: str, url: str) -> bool:
+    """
+    Save one analysed game, retrying with backoff if the write hits a
+    momentary "database is locked" error. Returns False (after logging) if
+    every attempt fails, so the caller can skip just this one game rather
+    than losing the rest of a shard's remaining games -- a skipped game
+    isn't lost permanently, since already_analysed() will still see it as
+    unanalysed and pick it up again on the next run.
+    """
+    for attempt, delay in enumerate((0.0, *_SAVE_RETRY_DELAYS)):
+        if delay:
+            time.sleep(delay)
+        try:
+            save_game(conn, rec, mistakes, depth)
+            return True
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                raise
+            logger.warning(f"[{user}] database locked saving {url} "
+                           f"(attempt {attempt + 1}/{len(_SAVE_RETRY_DELAYS) + 1})")
+    logger.error(f"[{user}] giving up on {url} after repeated 'database is locked' "
+                f"errors -- it will be picked up on the next run.")
+    return False
+
 
 class _ShardAnalysisError(Exception):
     """Raised by _run_parallel() when it must abort (cancellation or a shard
-    failure) after some shards already completed. Carries games_new (the
-    partial count still worth recording in the runs row) and original (the
+    failure) after some shards already completed. Carries games_new/failed
+    (the partial results still worth recording/reporting) and original (the
     exception or KeyboardInterrupt to actually propagate to the caller), so
-    the per-user finally that writes the runs row sees the right count even
-    when the parallel path aborts partway."""
+    the per-user finally that writes the runs row sees the right numbers
+    even when the parallel path aborts partway."""
 
-    def __init__(self, games_new: int, original: BaseException):
+    def __init__(self, games_new: int, failed: list[str], original: BaseException):
         super().__init__(str(original))
         self.games_new = games_new
+        self.failed = failed
         self.original = original
 
 
@@ -73,18 +110,20 @@ def _partition_games(games: list[dict], workers: int) -> list[list[dict]]:
 def _analyse_shard(db_path: str, user: str, games: list[dict], engine_path: str,
                    depth: int, threads: int, min_loss: int,
                    progress_queue: multiprocessing.Queue, shard_index: int,
-                   cancel_event) -> int:
+                   cancel_event) -> tuple[int, list[str]]:
     """
     Runs in its own worker process (module-level so it's picklable under
     Windows' spawn start method). Opens its own db connection and Stockfish
     engine -- neither can cross a process boundary -- and analyses its shard
     exactly like the serial loop below, reporting progress via a shared
     Queue instead of a direct callback (which also can't cross the boundary).
+    Returns (games saved, urls that couldn't be saved after retries).
     """
     conn = open_db(db_path)
     engine = chess.engine.SimpleEngine.popen_uci(engine_path)
     engine.configure({"Threads": threads})
     new = 0
+    failed = []
     try:
         for i, g in enumerate(games, 1):
             if cancel_event.is_set():
@@ -92,20 +131,23 @@ def _analyse_shard(db_path: str, user: str, games: list[dict], engine_path: str,
             result = analyse_game(g, user, engine, depth, min_loss)
             if result:
                 rec, mistakes = result
-                save_game(conn, rec, mistakes, depth)
-                new += 1
+                if _save_with_retry(conn, rec, mistakes, depth, user, g.get("url", "")):
+                    new += 1
+                else:
+                    failed.append(g.get("url", ""))
             progress_queue.put((shard_index, i, len(games)))
     finally:
         engine.quit()
         conn.close()
-    return new
+    return new, failed
 
 
 def _run_parallel(db_path: str, user: str, todo: list[dict], engine_path: str,
                   depth: int, threads: int, min_loss: int, workers: int,
                   quiet: bool, progress_cb: Callable[[str, int, int], None] | None,
-                  cancel_event: threading.Event | None) -> int:
-    """Analyse one user's backlog across `workers` processes. See
+                  cancel_event: threading.Event | None) -> tuple[int, list[str]]:
+    """Analyse one user's backlog across `workers` processes. Returns (games
+    saved, urls that couldn't be saved after retries). See
     docs/parallel-analysis-design.md for the full design."""
     shards = [s for s in _partition_games(todo, workers) if s]
     per_worker_threads = max(1, threads // len(shards))
@@ -154,26 +196,31 @@ def _run_parallel(db_path: str, user: str, todo: list[dict], engine_path: str,
                 mp_cancel.set()
                 wait(futures)
                 drain_queue()
-                partial = sum(f.result() for f in futures if not f.exception())
-                raise _ShardAnalysisError(partial, ki)
+                done_results = [f.result() for f in futures if not f.exception()]
+                partial = sum(n for n, _ in done_results)
+                failed = [url for _, urls in done_results for url in urls]
+                raise _ShardAnalysisError(partial, failed, ki)
 
             drain_queue()
             report(sum(progress_state))
 
             results = []
-            failures = []
+            failed = []
+            exceptions = []
             for future in futures:
                 try:
-                    results.append(future.result())
+                    n, urls = future.result()
+                    results.append(n)
+                    failed.extend(urls)
                 except Exception as exc:
                     logger.error(f"[{user}] a parallel shard failed: {exc!r}")
-                    failures.append(exc)
+                    exceptions.append(exc)
 
     if not quiet and total:
         print(file=sys.stderr)
-    if failures:
-        raise _ShardAnalysisError(sum(results), failures[0])
-    return sum(results)
+    if exceptions:
+        raise _ShardAnalysisError(sum(results), failed, exceptions[0])
+    return sum(results), failed
 
 
 def run_analysis(conn: sqlite3.Connection, users: list[str], email: str, engine_path: str,
@@ -232,11 +279,12 @@ def run_analysis(conn: sqlite3.Connection, users: list[str], email: str, engine_
                             and db_path is not None)
 
             new = 0
+            failed: list[str] = []
             try:
                 if use_parallel:
-                    new = _run_parallel(db_path, user, todo, engine_path, depth,
-                                        threads, min_loss, workers, quiet,
-                                        progress_cb, cancel_event)
+                    new, failed = _run_parallel(db_path, user, todo, engine_path, depth,
+                                                threads, min_loss, workers, quiet,
+                                                progress_cb, cancel_event)
                 else:
                     for i, g in enumerate(todo, 1):
                         if cancel_event is not None and cancel_event.is_set():
@@ -244,8 +292,11 @@ def run_analysis(conn: sqlite3.Connection, users: list[str], email: str, engine_
                         result = analyse_game(g, user, engine, depth, min_loss)
                         if result:
                             rec, mistakes = result
-                            save_game(conn, rec, mistakes, depth)
-                            new += 1
+                            if _save_with_retry(conn, rec, mistakes, depth, user,
+                                                g.get("url", "")):
+                                new += 1
+                            else:
+                                failed.append(g.get("url", ""))
                         if not quiet:
                             print(f"\r[{user}] analysed {i}/{len(todo)}", end="",
                                   file=sys.stderr)
@@ -257,6 +308,7 @@ def run_analysis(conn: sqlite3.Connection, users: list[str], email: str, engine_
                 raise
             except _ShardAnalysisError as exc:
                 new = exc.games_new
+                failed = exc.failed
                 if isinstance(exc.original, KeyboardInterrupt):
                     logger.warning(f"\n[{user}] interrupted. Everything analysed so "
                                    f"far is saved.")
@@ -272,6 +324,12 @@ def run_analysis(conn: sqlite3.Connection, users: list[str], email: str, engine_
                                  (user.lower(), started,
                                   datetime.now(timezone.utc).isoformat(timespec="seconds"),
                                   client.requests_made, new, depth))
+
+            if failed:
+                logger.warning(
+                    f"[{user}] {len(failed)} of {len(todo)} games could not be "
+                    f"saved this run (see warnings above) -- re-run chess-tracker "
+                    f"to pick them up, nothing is lost.")
 
             if cancel_event is not None and cancel_event.is_set():
                 break
