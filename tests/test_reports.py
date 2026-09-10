@@ -553,6 +553,19 @@ def test_practice_stats_zero_attempts_returns_zeroed_dict_not_none():
     assert stats["recent"] == []
 
 
+def test_practice_stats_overall_total_is_not_capped_at_the_practice_queue_limit():
+    conn = open_db(":memory:")
+    save_game(conn, _game("https://x/g1", moves=1000, om=1000, mm=0, em=0), [
+        _mistake("https://x/g1", cp_loss=2000 - i, move_number=i + 1, category="a")
+        for i in range(PRACTICE_QUEUE_LIMIT + 20)
+    ], depth=14)
+
+    # practice_queue() itself is still capped (it's an ordering/display
+    # concern for practice mode), but the achievements total must not be.
+    assert len(practice_queue(conn, "alice")) == PRACTICE_QUEUE_LIMIT
+    assert practice_stats(conn, "alice")["overall"]["total"] == PRACTICE_QUEUE_LIMIT + 20
+
+
 def test_practice_stats_overall_progress():
     conn = open_db(":memory:")
     save_game(conn, _game("https://x/g1"), [

@@ -339,6 +339,38 @@ def test_practice_attempt_hint_free_retry_flips_position_to_solved(tmp_path):
     conn.close()
 
 
+def test_delete_one_practice_attempt(tmp_path):
+    db_path = _practice_seeded_db(tmp_path)
+    client = TestClient(create_app(db_path))
+    client.post("/api/practice/1/attempt",
+               json={"from": "e2", "to": "e4", "practicingUser": "alice"})
+    client.post("/api/practice/1/attempt",
+               json={"from": "d2", "to": "d4", "practicingUser": "alice"})
+    assert len(_attempt_rows(db_path)) == 2
+
+    attempt_id = _attempt_rows(db_path)[0]["id"]
+    r = client.delete(f"/api/practice-attempts/{attempt_id}")
+    assert r.status_code == 200
+
+    remaining = _attempt_rows(db_path)
+    assert len(remaining) == 1
+    assert remaining[0]["id"] != attempt_id
+
+
+def test_reset_all_practice_attempts_for_a_user(tmp_path):
+    db_path = _practice_seeded_db(tmp_path)
+    client = TestClient(create_app(db_path))
+    client.post("/api/practice/1/attempt",
+               json={"from": "e2", "to": "e4", "practicingUser": "alice"})
+    client.post("/api/practice/1/attempt",
+               json={"from": "d2", "to": "d4", "practicingUser": "alice"})
+    assert len(_attempt_rows(db_path)) == 2
+
+    r = client.delete("/api/practice-attempts", params={"user": "alice"})
+    assert r.status_code == 200
+    assert _attempt_rows(db_path) == []
+
+
 def test_home_page_lists_tracked_users(tmp_path):
     client = TestClient(create_app(_seeded_db(tmp_path)))
     r = client.get("/")
@@ -564,7 +596,7 @@ def test_achievements_page_with_no_practice_attempts_shows_empty_practice_state(
     client = TestClient(create_app(db_path))
     r = client.get("/achievements", params={"users": "alice"})
     assert r.status_code == 200
-    assert "0 of 1 practiceable positions" in r.text
+    assert "0 of 1 recorded positions" in r.text
     assert "No successful attempts yet" in r.text
     assert "No practice attempts recorded yet" in r.text
 
@@ -577,7 +609,7 @@ def test_achievements_page_shows_practice_stats(tmp_path):
 
     r = client.get("/achievements", params={"users": "alice"})
     assert r.status_code == 200
-    assert "1 of 1 practiceable positions" in r.text
+    assert "1 of 1 recorded positions" in r.text
     assert "1 solved" in r.text
     assert "(100%)" in r.text
     assert "Recent practice sessions" in r.text

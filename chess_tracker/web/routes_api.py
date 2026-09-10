@@ -163,3 +163,31 @@ async def practice_attempt(request: Request, mistake_id: int):
 
     result["correct"] = result["verdict"] == "best"  # kept for older clients
     return result
+
+
+@router.delete("/practice-attempts/{attempt_id}")
+def delete_practice_attempt(request: Request, attempt_id: int):
+    """Remove one logged attempt (a row in the Achievements "Recent practice
+    sessions" table) -- e.g. one you didn't mean to have tracked."""
+    conn = open_db(request.app.state.db_path)
+    try:
+        conn.execute("DELETE FROM practice_attempts WHERE id = ?", (attempt_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"deleted": True}
+
+
+@router.delete("/practice-attempts")
+def reset_practice_attempts(request: Request, user: str):
+    """Clear all of one player's practice-attempt history -- the "reset"
+    button on Achievements, for starting the solve-rate/progress stats over
+    from scratch."""
+    conn = open_db(request.app.state.db_path)
+    try:
+        conn.execute("DELETE FROM practice_attempts WHERE practicing_user = ?",
+                     (user.lower(),))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"deleted": True}

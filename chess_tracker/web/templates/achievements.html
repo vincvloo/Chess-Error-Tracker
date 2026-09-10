@@ -71,11 +71,11 @@
 <div class="panel">
   <h2>Practice progress</h2>
   {% if practice.overall.total %}
-  <p>{{ practice.overall.attempted }} of {{ practice.overall.total }} practiceable positions
+  <p>{{ practice.overall.attempted }} of {{ practice.overall.total }} recorded positions
     attempted, {{ practice.overall.solved }} solved
     ({{ "%.0f"|format(practice.overall.solved / practice.overall.total * 100) }}%).</p>
   {% else %}
-  <p class="muted">No positions in your practice queue yet.</p>
+  <p class="muted">No serious mistakes recorded yet.</p>
   {% endif %}
 </div>
 
@@ -114,23 +114,48 @@
 <div class="panel">
   <h2>Recent practice sessions</h2>
   {% if practice.recent %}
-  <table>
-    <thead><tr><th>when</th><th>category</th><th>source</th><th>result</th><th>hint</th></tr></thead>
+  <table id="recentTable">
+    <thead><tr><th>when</th><th>category</th><th>source</th><th>result</th><th>hint</th><th></th></tr></thead>
     <tbody>
       {% for a in practice.recent %}
-      <tr>
+      <tr data-attempt-id="{{ a.id }}">
         <td>{{ a.created_at }}</td>
         <td>{{ a.category }}</td>
         <td>{{ "yours" if a.is_own else "@" + a.owner }}</td>
         <td>{{ a.verdict }}</td>
         <td>{{ "yes" if a.hint_used else "" }}</td>
+        <td><a href="#" class="navlink delete-attempt" data-id="{{ a.id }}">remove</a></td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  <div class="btnrow">
+    <button type="button" id="resetHistoryBtn" class="btn-secondary"
+      style="color:var(--danger);border-color:var(--danger)">Reset practice history</button>
+  </div>
   {% else %}
   <p class="muted">No practice attempts recorded yet.</p>
   {% endif %}
 </div>
+
+{% if practice.recent %}
+<script>
+document.getElementById("recentTable").addEventListener("click", async (e) => {
+  const link = e.target.closest(".delete-attempt");
+  if (!link) return;
+  e.preventDefault();
+  const row = link.closest("tr");
+  await fetch("/api/practice-attempts/" + link.dataset.id, { method: "DELETE" });
+  row.remove();
+});
+
+document.getElementById("resetHistoryBtn").addEventListener("click", async () => {
+  if (!confirm("Clear all practice history for {{ username }}? This can't be undone.")) return;
+  await fetch("/api/practice-attempts?user=" + encodeURIComponent({{ username|tojson }}),
+    { method: "DELETE" });
+  window.location.reload();
+});
+</script>
+{% endif %}
 {% endif %}
 {% endblock %}

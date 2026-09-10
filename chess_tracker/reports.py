@@ -285,19 +285,17 @@ def practice_stats(conn: sqlite3.Connection, user: str, time_class: str | None =
     a player can have analysed games (report_model() succeeds) but zero
     practice attempts yet, which is a milder, separate empty state.
 
-    `overall["total"]` is scoped to practice_queue() (capped at
-    PRACTICE_QUEUE_LIMIT, i.e. what's actually offered in practice mode
-    today), while by_category's own_total/others_total below are unclipped
-    counts straight off `mistakes`. A player with one very lopsided category
-    can show a bigger own_total there than overall["total"] -- each number
-    answers a different question (what's reachable overall vs. how mistakes
-    split by category), so don't try to reconcile them.
+    `overall["total"]` is the sum of by_category's own_total across every
+    category -- the same unclipped counts straight off `mistakes`, not
+    practice_queue()'s PRACTICE_QUEUE_LIMIT-capped queue size (that queue is
+    an ordering/display concern for practice mode's "worst first" pass, not
+    a meaningful denominator here -- a player with more than 100 serious
+    mistakes should still see their real total).
     """
     u = user.lower()
     _, _, mistakes_where, mistakes_params = _scope(u, time_class, phase)
     severity_in = f"AND severity IN ({','.join('?' * len(SERIOUS))})"
 
-    total = len(practice_queue(conn, u, time_class, phase))
     attempted = conn.execute(
         "SELECT COUNT(DISTINCT mistake_id) c FROM practice_attempts WHERE practicing_user = ?",
         [u]).fetchone()["c"]
@@ -309,6 +307,7 @@ def practice_stats(conn: sqlite3.Connection, user: str, time_class: str | None =
     own_totals = dict(conn.execute(
         f"SELECT category, COUNT(*) c FROM mistakes {mistakes_where} {severity_in} "
         f"GROUP BY category", [*mistakes_params, *SERIOUS]).fetchall())
+    total = sum(own_totals.values())
 
     others_where = "WHERE username != ?"
     others_params: list = [u]
@@ -363,8 +362,9 @@ def practice_stats(conn: sqlite3.Connection, user: str, time_class: str | None =
         "SELECT * FROM practice_attempts WHERE practicing_user = ? "
         "ORDER BY created_at DESC, id DESC LIMIT 20", [u]).fetchall()
     recent = [{
-        "created_at": r["created_at"], "category": r["category"], "owner": r["owner"],
-        "is_own": r["owner"] == u, "verdict": r["verdict"], "hint_used": bool(r["hint_used"]),
+        "id": r["id"], "created_at": r["created_at"], "category": r["category"],
+        "owner": r["owner"], "is_own": r["owner"] == u, "verdict": r["verdict"],
+        "hint_used": bool(r["hint_used"]),
     } for r in recent_rows]
 
     return {
