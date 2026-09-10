@@ -57,6 +57,8 @@ select { font: inherit; padding: 3px 6px; border-radius: 6px; border: 1px solid 
 #gaps ul { margin: 6px 0 0; padding-left: 18px; }
 #gaps li { margin: 3px 0; }
 h2 { font-size: 14px; margin: 0 0 4px; }
+h3 { font-size: 12.5px; margin: 14px 0 4px; color: var(--muted); }
+h3:first-child { margin-top: 0; }
 .trendhead { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
 .seg button { background: var(--panel); color: var(--text); border: none; padding: 4px 12px;
@@ -73,12 +75,28 @@ h2 { font-size: 14px; margin: 0 0 4px; }
 svg.trend text { fill: var(--muted); font-size: 10.5px; }
 svg.trend .gridline { stroke: var(--border); stroke-width: 1; }
 svg.trend .empty { fill: var(--muted); font-size: 12.5px; }
+.deltarow { display: grid; grid-template-columns: 90px 12px 90px 60px 1fr; gap: 6px;
+  align-items: center; font-size: 12.5px; margin: 3px 0; font-variant-numeric: tabular-nums; }
+.deltaworse { color: #c1507a; } .deltabetter { color: #3fa66f; } .deltaflat { color: var(--muted); }
+.note { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.emptynote { font-size: 12.5px; color: var(--muted); }
+.poslist { display: flex; flex-direction: column; gap: 10px; }
+.posrow { border-bottom: 1px solid var(--border); padding-bottom: 8px; font-size: 12.5px; }
+.posrow:last-child { border-bottom: none; padding-bottom: 0; }
+.poshead { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.poscp { font-weight: 700; color: #c1507a; min-width: 60px; }
+.posmeta { color: var(--muted); }
+.poscat { margin-top: 2px; }
+.poslink { color: var(--accent); text-decoration: none; word-break: break-all; }
+.poslink:hover { text-decoration: underline; }
+.openrow { display: grid; grid-template-columns: 60px 1fr 70px; gap: 8px; align-items: center;
+  font-size: 12.5px; margin: 3px 0; }
 </style>
 </head>
 <body>
 <header>
   <h1>Chess Mistake Explorer</h1>
-  <div class="meta">Generated __GENERATED_AT__ &middot; filter by player, game phase, time class and mistake type</div>
+  <div class="meta">Generated __GENERATED_AT__ &middot; filter by player, game phase, time class, severity and mistake type</div>
 </header>
 <div class="app">
   <aside class="filters">
@@ -96,6 +114,11 @@ svg.trend .empty { fill: var(--muted); font-size: 12.5px; }
       <div class="groupbar"><summary style="cursor:default">Time class</summary>
         <div class="grouplinks"><button data-act="all">all</button><button data-act="none">none</button></div></div>
       <div class="chklist" id="chk-tc"></div>
+    </div>
+    <div class="panel group" id="grp-severities">
+      <div class="groupbar"><summary style="cursor:default">Severity</summary>
+        <div class="grouplinks"><button data-act="all">all</button><button data-act="none">none</button></div></div>
+      <div class="chklist" id="chk-severities"></div>
     </div>
     <div class="panel group" id="grp-cats">
       <div class="groupbar"><summary style="cursor:default">Mistake type</summary>
@@ -122,10 +145,32 @@ svg.trend .empty { fill: var(--muted); font-size: 12.5px; }
       <div class="legend" id="trendLegend"></div>
       <div class="trendwrap"><svg id="trendChart" class="trend"></svg></div>
       <div class="warn-note" id="trendWarnNote"></div>
+      <div id="halfDeltas"></div>
     </div>
     <div class="panel">
       <h2>By mistake type</h2>
       <div class="tablewrap"><table id="table"></table></div>
+    </div>
+    <div class="panel">
+      <h2>By move number</h2>
+      <div class="tablewrap"><table id="moveTable"></table></div>
+    </div>
+    <div class="panel">
+      <h2>Time pressure</h2>
+      <div class="tablewrap"><table id="clockTable"></table></div>
+      <div id="clockNotes"></div>
+    </div>
+    <div class="panel">
+      <h2>By colour and time control</h2>
+      <div id="colourTc"></div>
+    </div>
+    <div class="panel">
+      <h2>Openings you play often</h2>
+      <div id="openings"></div>
+    </div>
+    <div class="panel">
+      <h2>Positions to review</h2>
+      <div id="positions"></div>
     </div>
     <div class="panel">
       <h2>Biggest gaps</h2>
@@ -136,21 +181,113 @@ svg.trend .empty { fill: var(--muted); font-size: 12.5px; }
     </div>
   </main>
 </div>
-<script>
+<script id="agg">
 const DATA = __DATA_JSON__;
 
+// ---- pure aggregation helpers (no DOM) -------------------------------
+// A fact table is {dims: [...names], measures: [...names], data: [rows]}
+// where each row is dims.length dimension indices followed by
+// measures.length raw numbers. A table simply has no entry for a
+// dimension it wasn't built with, so filters on dims it lacks are
+// silently ignored -- that's what gives every denominator the right
+// semantics without special-casing each panel.
+
+function indicesOf(list, selectedSet) {
+  const s = new Set();
+  list.forEach((v, i) => { if (selectedSet.has(v)) s.add(i); });
+  return s;
+}
+
+function withOverride(sel, extra) {
+  return Object.assign({}, sel, extra);
+}
+
+function rowsMatching(table, sel) {
+  const dims = table.dims;
+  const out = [];
+  outer:
+  for (const row of table.data) {
+    for (let i = 0; i < dims.length; i++) {
+      const f = sel[dims[i]];
+      if (f && !f.has(row[i])) continue outer;
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+function sumFacts(table, sel, measureIndex) {
+  measureIndex = measureIndex || 0;
+  const dims = table.dims;
+  let total = 0;
+  outer:
+  for (const row of table.data) {
+    for (let i = 0; i < dims.length; i++) {
+      const f = sel[dims[i]];
+      if (f && !f.has(row[i])) continue outer;
+    }
+    total += row[dims.length + measureIndex];
+  }
+  return total;
+}
+
+// Sums `table`, grouped by one dimension not otherwise restricted by
+// `sel` (e.g. moveBucket, clockBucket, colour, eco, month). Returns an
+// array indexed the same as `groupList`.
+function groupFacts(table, sel, groupDim, groupList, measureIndex) {
+  measureIndex = measureIndex || 0;
+  const dims = table.dims;
+  const gi = dims.indexOf(groupDim);
+  const totals = new Array(groupList.length).fill(0);
+  outer:
+  for (const row of table.data) {
+    for (let i = 0; i < dims.length; i++) {
+      if (i === gi) continue;
+      const f = sel[dims[i]];
+      if (f && !f.has(row[i])) continue outer;
+    }
+    totals[row[gi]] += row[dims.length + measureIndex];
+  }
+  return totals;
+}
+
+// Moves denominator for `sel`. When every phase is selected, moves_played
+// (from gamesFacts) is used instead of summing the three phase columns --
+// moves_played is populated even for a game whose per-phase columns
+// haven't been backfilled yet, so this is the more correct denominator
+// whenever nothing narrows the selection to one phase.
+function movesFor(sel) {
+  if (sel.phase && sel.phase.size === DATA.lists.phases.length) {
+    return sumFacts(DATA.gamesFacts, sel, 1);
+  }
+  return sumFacts(DATA.movesFacts, sel);
+}
+
+// The union of any selected topFacts buckets' top rows, re-sorted and
+// re-sliced, equals the true top `limit` of that union: buckets are
+// disjoint and every row is sorted by the same total order
+// (cp_loss desc, end_time desc, id as a tiebreak), so no bucket needs to
+// store more than `limit` rows for this to be exact.
+function filterTop(sel, limit) {
+  const rows = rowsMatching(DATA.topFacts, sel);
+  rows.sort((a, b) => (b[5] - a[5]) || (b[6] - a[6]) || (b[7] - a[7]));
+  return rows.slice(0, limit);
+}
+</script>
+<script id="ui">
 const state = {
-  users: new Set(DATA.users),
-  phases: new Set(DATA.phases),
-  timeClasses: new Set(DATA.timeClasses),
-  categories: new Set(DATA.categories),
-  ref: DATA.users[0],
+  users: new Set(DATA.lists.users),
+  phases: new Set(DATA.lists.phases),
+  timeClasses: new Set(DATA.lists.timeClasses),
+  severities: new Set(DATA.meta.defaultSeverities),
+  categories: new Set(DATA.lists.categories),
+  ref: DATA.lists.users[0],
   granularity: "month",
 };
 
 const PALETTE = ["#3f6fd6", "#e08a3f", "#3fa66f", "#c1507a", "#8a63d6", "#c9a227", "#3fb6c9", "#a25a3f"];
 function colorFor(user) {
-  const idx = DATA.users.indexOf(user);
+  const idx = DATA.lists.users.indexOf(user);
   return PALETTE[idx % PALETTE.length];
 }
 
@@ -187,101 +324,37 @@ function wireGroupLinks(groupId, containerId, items, selectedSet) {
   });
 }
 
-function movesFor(user) {
-  let total = 0;
-  const tcData = DATA.moves[user] || {};
-  for (const tc of state.timeClasses) {
-    const ph = tcData[tc];
-    if (!ph) continue;
-    for (const p of state.phases) total += ph[p] || 0;
-  }
-  return total;
+function baseSel() {
+  return {
+    user: indicesOf(DATA.lists.users, state.users),
+    tc: indicesOf(DATA.lists.timeClasses, state.timeClasses),
+    phase: indicesOf(DATA.lists.phases, state.phases),
+    severity: indicesOf(DATA.lists.severities, state.severities),
+    category: indicesOf(DATA.lists.categories, state.categories),
+  };
 }
 
-function gamesFor(user) {
-  let total = 0;
-  const tcData = DATA.moves[user] || {};
-  for (const tc of state.timeClasses) {
-    const ph = tcData[tc];
-    if (ph) total += ph.games || 0;
-  }
-  return total;
+function userSel(sel, user) {
+  return withOverride(sel, { user: new Set([DATA.lists.users.indexOf(user)]) });
 }
 
-function countFor(user, category) {
-  let total = 0;
-  const tcData = DATA.counts[user] || {};
-  for (const tc of state.timeClasses) {
-    const phData = tcData[tc];
-    if (!phData) continue;
-    for (const p of state.phases) {
-      const catData = phData[p];
-      if (catData) total += catData[category] || 0;
-    }
-  }
-  return total;
+function countFor(sel, user, category) {
+  const catSel = withOverride(userSel(sel, user),
+    { category: new Set([DATA.lists.categories.indexOf(category)]) });
+  return sumFacts(DATA.countFacts, catSel);
 }
 
-function rateOf(user, category) {
-  const m = movesFor(user);
+function rateOf(sel, user, category) {
+  const m = movesFor(userSel(sel, user));
   if (!m) return null;
-  return countFor(user, category) / m * 100;
+  return countFor(sel, user, category) / m * 100;
 }
 
-function totalRate(user) {
-  const m = movesFor(user);
+function totalRate(sel, user) {
+  const uSel = userSel(sel, user);
+  const m = movesFor(uSel);
   if (!m) return null;
-  let n = 0;
-  for (const c of state.categories) n += countFor(user, c);
-  return n / m * 100;
-}
-
-function movesForMonths(user, monthList) {
-  let total = 0;
-  const tcData = DATA.movesByMonth[user] || {};
-  for (const tc of state.timeClasses) {
-    const monthMap = tcData[tc];
-    if (!monthMap) continue;
-    for (const mo of monthList) {
-      const md = monthMap[mo];
-      if (!md) continue;
-      for (const p of state.phases) total += md[p] || 0;
-    }
-  }
-  return total;
-}
-
-function gamesForMonths(user, monthList) {
-  let total = 0;
-  const tcData = DATA.movesByMonth[user] || {};
-  for (const tc of state.timeClasses) {
-    const monthMap = tcData[tc];
-    if (!monthMap) continue;
-    for (const mo of monthList) {
-      const md = monthMap[mo];
-      if (md) total += md.games || 0;
-    }
-  }
-  return total;
-}
-
-function countForMonths(user, monthList) {
-  let total = 0;
-  const tcData = DATA.countsByMonth[user] || {};
-  for (const tc of state.timeClasses) {
-    const phData = tcData[tc];
-    if (!phData) continue;
-    for (const p of state.phases) {
-      const monthMap = phData[p];
-      if (!monthMap) continue;
-      for (const mo of monthList) {
-        const catData = monthMap[mo];
-        if (!catData) continue;
-        for (const c of state.categories) total += catData[c] || 0;
-      }
-    }
-  }
-  return total;
+  return sumFacts(DATA.countFacts, uSel) / m * 100;
 }
 
 function quarterKey(m) {
@@ -295,30 +368,30 @@ function halfKey(m) {
 }
 
 function trendBuckets() {
-  const all = DATA.months;
+  const all = DATA.lists.months;
   const keyed = { year: m => m.slice(0, 4), quarter: quarterKey, half: halfKey }[state.granularity];
-  if (!keyed) return all.map(m => ({ key: m, months: [m] }));
-  // Lexicographic sort matches chronological order for all three key shapes
-  // ('2026', '2026-Q3', '2026-H1'), since the year prefix sorts first.
+  if (!keyed) return all.map((m, i) => ({ key: m, monthIdx: [i] }));
   const keys = [...new Set(all.map(keyed))].sort();
-  return keys.map(k => ({ key: k, months: all.filter(m => keyed(m) === k) }));
+  return keys.map(k => ({ key: k, monthIdx: all.map((m, i) => [m, i]).filter(([m]) => keyed(m) === k).map(([, i]) => i) }));
 }
 
-function trendSeries(user, bkts) {
+function trendSeries(sel, user, bkts) {
+  const uSel = userSel(sel, user);
+  const movesByMonth = groupFacts(DATA.movesFacts, uSel, "month", DATA.lists.months);
+  const gamesByMonth = groupFacts(DATA.gamesFacts, uSel, "month", DATA.lists.months, 0);
+  const countByMonth = groupFacts(DATA.countFacts, uSel, "month", DATA.lists.months);
   return bkts.map(b => {
-    const moves = movesForMonths(user, b.months);
-    const games = gamesForMonths(user, b.months);
-    const n = countForMonths(user, b.months);
-    return {
-      key: b.key,
-      rate: moves ? n / moves * 100 : null,
-      moves, games,
-      thin: games > 0 && games < DATA.thinGamesThreshold,
-    };
+    const moves = b.monthIdx.reduce((s, i) => s + movesByMonth[i], 0);
+    const games = b.monthIdx.reduce((s, i) => s + gamesByMonth[i], 0);
+    const n = b.monthIdx.reduce((s, i) => s + countByMonth[i], 0);
+    // Three states: games but no moves in this phase -> 0.0 (a real
+    // reading), no games at all -> null (a gap, nothing happened).
+    const rate = moves ? n / moves * 100 : (games ? 0.0 : null);
+    return { key: b.key, rate, moves, games, thin: games > 0 && games < DATA.meta.thinGamesThreshold };
   });
 }
 
-function renderTrend(users) {
+function renderTrend(sel, users) {
   const svgNS = "http://www.w3.org/2000/svg";
   const svg = document.getElementById("trendChart");
   svg.innerHTML = "";
@@ -337,7 +410,7 @@ function renderTrend(users) {
     return;
   }
 
-  const seriesByUser = users.map(u => ({ user: u, pts: trendSeries(u, bkts) }));
+  const seriesByUser = users.map(u => ({ user: u, pts: trendSeries(sel, u, bkts) }));
   const allRates = seriesByUser.flatMap(s => s.pts.map(p => p.rate)).filter(v => v != null);
   const maxRate = Math.max(1, ...allRates) * 1.1;
 
@@ -412,7 +485,7 @@ function renderTrend(users) {
       const title = document.createElementNS(svgNS, "title");
       title.textContent = user + " — " + p.key + ": " + p.rate.toFixed(2) +
         " per 100 moves (" + p.moves + " moves, " + p.games + " games)" +
-        (p.thin ? " ⚠ fewer than " + DATA.thinGamesThreshold + " games this period, noisy" : "");
+        (p.thin ? " ⚠ fewer than " + DATA.meta.thinGamesThreshold + " games this period, noisy" : "");
       c.appendChild(title);
       svg.appendChild(c);
     });
@@ -424,21 +497,261 @@ function renderTrend(users) {
 
   document.getElementById("trendWarnNote").innerHTML = anyThin
     ? '<span class="ring"></span>hollow points mark periods with fewer than ' +
-      DATA.thinGamesThreshold + ' games for that player — treat those readings as noisy.'
+      DATA.meta.thinGamesThreshold + ' games for that player — treat those readings as noisy.'
     : "";
 }
 
+// First-half-of-period vs second-half-of-period category deltas, for one
+// user. Ties in |delta| break on category name so the order is stable.
+function halfDeltasFor(sel, user) {
+  const uSel = userSel(sel, user);
+  const gamesByMonth = groupFacts(DATA.gamesFacts, uSel, "month", DATA.lists.months, 0);
+  const movesByMonth = groupFacts(DATA.movesFacts, uSel, "month", DATA.lists.months);
+  const monthsWithGames = DATA.lists.months.map((_, i) => i).filter(i => gamesByMonth[i] > 0);
+  if (monthsWithGames.length < 2) return null;
+
+  const half = Math.max(Math.floor(monthsWithGames.length / 2), 1);
+  const earlySet = new Set(monthsWithGames.slice(0, half));
+  const lateSet = new Set(monthsWithGames.slice(half));
+  const earlyMoves = [...earlySet].reduce((s, i) => s + movesByMonth[i], 0);
+  const lateMoves = [...lateSet].reduce((s, i) => s + movesByMonth[i], 0);
+  if (!earlyMoves || !lateMoves) return null;
+
+  const dims = DATA.countFacts.dims;
+  const moDim = dims.indexOf("month"), catDim = dims.indexOf("category");
+  const earlyCount = new Map(), lateCount = new Map();
+  outer:
+  for (const row of DATA.countFacts.data) {
+    for (let i = 0; i < dims.length; i++) {
+      if (i === moDim) continue;
+      const f = uSel[dims[i]];
+      if (f && !f.has(row[i])) continue outer;
+    }
+    const mo = row[moDim], cat = row[catDim], n = row[dims.length];
+    if (earlySet.has(mo)) earlyCount.set(cat, (earlyCount.get(cat) || 0) + n);
+    else if (lateSet.has(mo)) lateCount.set(cat, (lateCount.get(cat) || 0) + n);
+  }
+
+  const catIdxs = new Set([...earlyCount.keys(), ...lateCount.keys()]);
+  const deltas = [...catIdxs].map(ci => {
+    const a = (earlyCount.get(ci) || 0) / earlyMoves * 100;
+    const b = (lateCount.get(ci) || 0) / lateMoves * 100;
+    return { d: b - a, a, b, cat: DATA.lists.categories[ci] };
+  });
+  deltas.sort((x, y) => (Math.abs(y.d) - Math.abs(x.d)) || (x.cat < y.cat ? -1 : x.cat > y.cat ? 1 : 0));
+  return deltas.slice(0, 6);
+}
+
+function renderHalfDeltas(sel, users) {
+  const el = document.getElementById("halfDeltas");
+  el.innerHTML = "";
+  users.forEach(user => {
+    const deltas = halfDeltasFor(sel, user);
+    if (!deltas || !deltas.length) return;
+    const h3 = document.createElement("h3");
+    h3.textContent = user + " — first half of the selected period vs second half";
+    el.appendChild(h3);
+    deltas.forEach(({ d, a, b, cat }) => {
+      const row = document.createElement("div");
+      row.className = "deltarow";
+      const cls = d > DATA.meta.deltaEpsilon ? "deltaworse"
+                : d < -DATA.meta.deltaEpsilon ? "deltabetter" : "deltaflat";
+      const arrow = d > DATA.meta.deltaEpsilon ? "worse" : d < -DATA.meta.deltaEpsilon ? "better" : "flat";
+      row.innerHTML =
+        '<span>' + a.toFixed(2) + '</span><span>&rarr;</span><span>' + b.toFixed(2) + '</span>' +
+        '<span class="' + cls + '">' + arrow + '</span><span>' + cat + '</span>';
+      el.appendChild(row);
+    });
+  });
+}
+
+function renderMetricTable(elId, rowLabels, users, getValue) {
+  const table = document.getElementById(elId);
+  if (!users.length || !rowLabels.length) { table.innerHTML = ""; return; }
+  let thead = "<thead><tr><th></th>" + users.map(u => "<th>" + u + "</th>").join("") + "</tr></thead>";
+  let tbody = "<tbody>";
+  rowLabels.forEach((label, ri) => {
+    const vals = users.map(u => getValue(u, ri));
+    if (vals.every(v => v === 0)) return;
+    tbody += "<tr><td>" + label + "</td>" + vals.map(v => "<td>" + v + "</td>").join("") + "</tr>";
+  });
+  tbody += "</tbody>";
+  table.innerHTML = thead + tbody;
+}
+
+function renderMoveTable(sel, users) {
+  renderMetricTable("moveTable", DATA.lists.moveBuckets, users, (user, ri) => {
+    const arr = groupFacts(DATA.moveBucketFacts, userSel(sel, user), "moveBucket", DATA.lists.moveBuckets);
+    return arr[ri];
+  });
+}
+
+function renderClockTable(sel, users) {
+  const el = document.getElementById("clockNotes");
+  el.innerHTML = "";
+  const perUser = users.map(user => {
+    const uSel = userSel(sel, user);
+    const arr = groupFacts(DATA.clockBucketFacts, uSel, "clockBucket", DATA.lists.clockBuckets);
+    const total = arr.reduce((a, b) => a + b, 0);
+    return { user, arr, total };
+  });
+  renderMetricTable("clockTable", DATA.lists.clockBuckets, users, (user, ri) => {
+    const u = perUser.find(p => p.user === user);
+    return u.arr[ri];
+  });
+  perUser.forEach(({ user, arr, total }) => {
+    if (!total) return;
+    const underFirst = arr[0] / total;
+    if (underFirst > DATA.meta.timePressureAlert) {
+      const p = document.createElement("div");
+      p.className = "note";
+      p.textContent = user + ": most damage happens on a low clock — a time " +
+        "management problem, not a chess knowledge problem.";
+      el.appendChild(p);
+    }
+  });
+}
+
+function renderColourTc(sel, users) {
+  const el = document.getElementById("colourTc");
+  el.innerHTML = "";
+  users.forEach(user => {
+    const uSel = userSel(sel, user);
+    const h3 = document.createElement("h3");
+    h3.textContent = user;
+    el.appendChild(h3);
+
+    const list = document.createElement("div");
+    DATA.lists.colours.forEach((colour, ci) => {
+      const colSel = withOverride(uSel, { colour: new Set([ci]) });
+      const mv = sumFacts(DATA.colourMovesFacts, colSel);
+      const e = sumFacts(DATA.colourCountFacts, colSel);
+      if (!mv) return;
+      const row = document.createElement("div");
+      row.className = "barrow";
+      row.innerHTML = '<div class="barlabel">' + colour + '</div><div></div>' +
+        '<div class="barvalue">' + (e / mv * 100).toFixed(2) + '</div>';
+      list.appendChild(row);
+    });
+    DATA.lists.timeClasses.forEach((tc, tci) => {
+      if (!uSel.tc.has(tci)) return;
+      const tcSel = withOverride(uSel, { tc: new Set([tci]) });
+      const mv = movesFor(tcSel);
+      const e = sumFacts(DATA.countFacts, tcSel);
+      if (!mv) return;
+      const row = document.createElement("div");
+      row.className = "barrow";
+      row.innerHTML = '<div class="barlabel">' + tc + '</div><div></div>' +
+        '<div class="barvalue">' + (e / mv * 100).toFixed(2) + '</div>';
+      list.appendChild(row);
+    });
+    el.appendChild(list);
+  });
+}
+
+function openingsFor(sel, user) {
+  const uSel = userSel(sel, user);
+  // ecoGamesFacts has no phase/severity/category dims, so this denominator
+  // is games in scope, not phase-filtered -- reproducing the terminal
+  // report's existing asymmetry with the (phase-filtered) numerator below.
+  const gamesByEco = groupFacts(DATA.ecoGamesFacts, uSel, "eco", DATA.lists.ecos);
+  const errByEco = groupFacts(DATA.ecoErrorFacts, uSel, "eco", DATA.lists.ecos);
+  return DATA.lists.ecos.map((eco, i) => ({ eco, games: gamesByEco[i], errors: errByEco[i] }))
+    .filter(r => r.games >= DATA.meta.ecoMinGames)
+    .sort((a, b) => (b.errors / b.games) - (a.errors / a.games))
+    .slice(0, DATA.meta.ecoTopN);
+}
+
+function renderOpenings(sel, users) {
+  const el = document.getElementById("openings");
+  el.innerHTML = "";
+  let any = false;
+  users.forEach(user => {
+    const rows = openingsFor(sel, user);
+    if (!rows.length) return;
+    any = true;
+    const h3 = document.createElement("h3");
+    h3.textContent = user;
+    el.appendChild(h3);
+    rows.forEach(r => {
+      const row = document.createElement("div");
+      row.className = "openrow";
+      row.innerHTML = '<span>' + r.eco + '</span><span>' + r.games + ' games</span>' +
+        '<span>' + (r.errors / r.games).toFixed(1) + '/game</span>';
+      el.appendChild(row);
+    });
+  });
+  if (!any) el.innerHTML = '<div class="emptynote">No opening played at least ' +
+    DATA.meta.ecoMinGames + ' times under the current filters.</div>';
+}
+
+function renderPositions(sel, users) {
+  const el = document.getElementById("positions");
+  el.innerHTML = "";
+  const list = document.createElement("div");
+  list.className = "poslist";
+  let any = false;
+  users.forEach(user => {
+    const uSel = userSel(sel, user);
+    const top = filterTop(uSel, DATA.meta.topPositions);
+    if (!top.length) return;
+    any = true;
+    const h3 = document.createElement("h3");
+    h3.textContent = user;
+    list.appendChild(h3);
+    top.forEach(row => {
+      const [, , , , cat, cpLoss, , , date, moveNumber, played, best, clockSeconds, gameUrl] = row;
+      const occurrences = sumFacts(DATA.countFacts,
+        withOverride(uSel, { category: new Set([cat]) }));
+      const posrow = document.createElement("div");
+      posrow.className = "posrow";
+      const head = document.createElement("div");
+      head.className = "poshead";
+      const cp = document.createElement("span");
+      cp.className = "poscp";
+      cp.textContent = "-" + cpLoss + "cp";
+      const meta = document.createElement("span");
+      meta.className = "posmeta";
+      meta.textContent = date + " · move " + moveNumber + " · played " + played +
+        " · best " + best + " · clock " + (clockSeconds != null ? Math.round(clockSeconds) + "s" : "?") +
+        " · (" + occurrences + " times)";
+      head.appendChild(cp);
+      head.appendChild(meta);
+      const catLine = document.createElement("div");
+      catLine.className = "poscat";
+      catLine.textContent = DATA.lists.categories[cat];
+      const link = document.createElement("a");
+      link.className = "poslink";
+      link.href = gameUrl;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = gameUrl;
+      posrow.appendChild(head);
+      posrow.appendChild(catLine);
+      posrow.appendChild(link);
+      list.appendChild(posrow);
+    });
+  });
+  if (!any) {
+    el.innerHTML = '<div class="emptynote">No mistakes for the current filters.</div>';
+  } else {
+    el.appendChild(list);
+  }
+}
+
 function render() {
-  const users = DATA.users.filter(u => state.users.has(u));
-  const cats = DATA.categories.filter(c => state.categories.has(c));
+  const sel = baseSel();
+  const users = DATA.lists.users.filter(u => state.users.has(u));
+  const cats = DATA.lists.categories.filter(c => state.categories.has(c));
 
   document.getElementById("summary").textContent =
     users.length + " player" + (users.length === 1 ? "" : "s") + " · " +
     state.phases.size + " phase" + (state.phases.size === 1 ? "" : "s") + " · " +
     state.timeClasses.size + " time class" + (state.timeClasses.size === 1 ? "" : "es") + " · " +
+    state.severities.size + " severit" + (state.severities.size === 1 ? "y" : "ies") + " · " +
     cats.length + " mistake type" + (cats.length === 1 ? "" : "s") + " selected";
 
-  const totals = users.map(u => ({ u, r: totalRate(u), m: movesFor(u), g: gamesFor(u) }));
+  const totals = users.map(u => ({ u, r: totalRate(sel, u), m: movesFor(userSel(sel, u)) }));
   const maxR = Math.max(1, ...totals.map(t => t.r || 0));
   const barsEl = document.getElementById("bars");
   barsEl.innerHTML = "";
@@ -447,15 +760,16 @@ function render() {
     row.className = "barrow";
     const width = t.r == null ? 0 : (t.r / maxR * 100);
     row.innerHTML =
-      '<div class="barlabel" title="' + t.u + ' &middot; ' + t.g + ' games">' + t.u + '</div>' +
+      '<div class="barlabel" title="' + t.u + '">' + t.u + '</div>' +
       '<div class="bartrack"><div class="barfill" style="width:' + width + '%"></div></div>' +
       '<div class="barvalue">' + (t.r == null ? "–" : t.r.toFixed(2)) + '</div>';
     barsEl.appendChild(row);
   });
 
-  renderTrend(users);
+  renderTrend(sel, users);
+  renderHalfDeltas(sel, users);
 
-  const rateRows = cats.map(c => ({ c, vals: users.map(u => rateOf(u, c)) }));
+  const rateRows = cats.map(c => ({ c, vals: users.map(u => rateOf(sel, u, c)) }));
   rateRows.sort((a, b) => {
     const gapA = Math.max(...a.vals.map(v => v ?? 0)) - Math.min(...a.vals.map(v => v ?? 0));
     const gapB = Math.max(...b.vals.map(v => v ?? 0)) - Math.min(...b.vals.map(v => v ?? 0));
@@ -478,8 +792,14 @@ function render() {
   tbody += "</tbody>";
   table.innerHTML = thead + tbody;
 
+  renderMoveTable(sel, users);
+  renderClockTable(sel, users);
+  renderColourTc(sel, users);
+  renderOpenings(sel, users);
+  renderPositions(sel, users);
+
   const refSel = document.getElementById("refSelect");
-  if (!users.includes(state.ref)) state.ref = users[0] || DATA.users[0];
+  if (!users.includes(state.ref)) state.ref = users[0] || DATA.lists.users[0];
   refSel.innerHTML = users.map(u =>
     '<option value="' + u + '"' + (u === state.ref ? " selected" : "") + ">" + u + "</option>").join("");
 
@@ -488,8 +808,8 @@ function render() {
   if (users.length >= 2 && state.ref) {
     const others = users.filter(u => u !== state.ref);
     const gaps = cats.map(c => {
-      const refR = rateOf(state.ref, c) ?? 0;
-      const otherVals = others.map(u => rateOf(u, c)).filter(v => v != null);
+      const refR = rateOf(sel, state.ref, c) ?? 0;
+      const otherVals = others.map(u => rateOf(sel, u, c)).filter(v => v != null);
       const otherMin = otherVals.length ? Math.min(...otherVals) : 0;
       return { c, gap: refR - otherMin };
     }).filter(g => g.gap > 0).sort((a, b) => b.gap - a.gap).slice(0, 6);
@@ -509,14 +829,16 @@ function render() {
   }
 }
 
-buildGroup("chk-users", DATA.users, state.users);
-buildGroup("chk-phases", DATA.phases, state.phases);
-buildGroup("chk-tc", DATA.timeClasses, state.timeClasses);
-buildGroup("chk-cats", DATA.categories, state.categories);
-wireGroupLinks("grp-users", "chk-users", DATA.users, state.users);
-wireGroupLinks("grp-phases", "chk-phases", DATA.phases, state.phases);
-wireGroupLinks("grp-tc", "chk-tc", DATA.timeClasses, state.timeClasses);
-wireGroupLinks("grp-cats", "chk-cats", DATA.categories, state.categories);
+buildGroup("chk-users", DATA.lists.users, state.users);
+buildGroup("chk-phases", DATA.lists.phases, state.phases);
+buildGroup("chk-tc", DATA.lists.timeClasses, state.timeClasses);
+buildGroup("chk-severities", DATA.lists.severities, state.severities);
+buildGroup("chk-cats", DATA.lists.categories, state.categories);
+wireGroupLinks("grp-users", "chk-users", DATA.lists.users, state.users);
+wireGroupLinks("grp-phases", "chk-phases", DATA.lists.phases, state.phases);
+wireGroupLinks("grp-tc", "chk-tc", DATA.lists.timeClasses, state.timeClasses);
+wireGroupLinks("grp-severities", "chk-severities", DATA.lists.severities, state.severities);
+wireGroupLinks("grp-cats", "chk-cats", DATA.lists.categories, state.categories);
 document.getElementById("refSelect").addEventListener("change", e => { state.ref = e.target.value; render(); });
 document.getElementById("granularity").addEventListener("click", e => {
   const btn = e.target.closest("button[data-g]");
