@@ -5,9 +5,15 @@
 .practicehead { display: flex; justify-content: space-between; align-items: baseline;
   flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .practicehead .muted { font-size: 12.5px; }
-.board { display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
-  width: 100%; max-width: 420px; aspect-ratio: 1; border: 1px solid var(--border);
-  border-radius: 6px; overflow: hidden; margin: 0 auto; }
+.boardwrap { display: grid; grid-template-columns: 18px 1fr; grid-template-rows: 1fr 18px;
+  width: 100%; max-width: 438px; margin: 0 auto; }
+.board { grid-column: 2; grid-row: 1; display: grid; grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(8, 1fr); aspect-ratio: 1; border: 1px solid var(--border);
+  border-radius: 6px; overflow: hidden; }
+.ranks { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; }
+.ranks span, .files span { flex: 1; display: flex; align-items: center; justify-content: center;
+  font-size: 10.5px; color: var(--muted); }
+.files { grid-column: 2; grid-row: 2; display: flex; }
 .sq { display: flex; align-items: center; justify-content: center; font-size: min(6vw, 34px);
   cursor: pointer; user-select: none; position: relative; }
 .sq.light { background: #EDE6D9; }
@@ -19,6 +25,7 @@
 .sq.selected { outline: 3px solid var(--accent); outline-offset: -3px; }
 .sq.target::after { content: ""; position: absolute; width: 28%; height: 28%; border-radius: 50%;
   background: var(--accent); opacity: 0.55; }
+.sq.hint { outline: 3px solid #c9a227; outline-offset: -3px; }
 .sq.white-piece { color: #f5f5f5; text-shadow: 0 0 2px #000, 0 0 1px #000; }
 .sq.black-piece { color: #111; text-shadow: 0 0 2px #fff8, 0 0 1px #fff8; }
 .promo { display: none; justify-content: center; gap: 8px; margin: 10px 0; }
@@ -83,7 +90,11 @@
     <a class="navlink" href="{{ data.gameUrl }}" target="_blank" rel="noopener noreferrer">View game &#8599;</a>
   </div>
 
-  <div class="board" id="board"></div>
+  <div class="boardwrap">
+    <div class="ranks" id="ranks"></div>
+    <div class="board" id="board"></div>
+    <div class="files" id="files"></div>
+  </div>
   <div class="promo" id="promo">
     <span class="muted">Promote to:</span>
     <button type="button" data-p="q">Q</button>
@@ -95,6 +106,7 @@
 
   <div class="practicenav">
     <button type="button" id="resetBtn" class="btn-secondary">Try again</button>
+    <button type="button" id="hintBtn" class="btn-secondary">Hint</button>
     {% if data.prevId %}<a class="btn-secondary" href="/practice/{{ data.prevId }}?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}&category={{ data.categoryFilter|default('') }}{% if data.extended %}&extend=1{% endif %}">&larr; Previous</a>{% endif %}
     {% if data.nextId %}<a class="btn" id="nextLink" href="/practice/{{ data.nextId }}?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}&category={{ data.categoryFilter|default('') }}{% if data.extended %}&extend=1{% endif %}">Next position &rarr;</a>{% else %}<span class="muted">That's the last one in this queue.</span>{% endif %}
   </div>
@@ -145,14 +157,15 @@ let currentFen = DATA.fen;
 let selected = null;
 let attempted = false;
 let pendingTarget = null; // {from, to} awaiting a promotion choice
+let hintUsed = false;
 
 function squareEl(sq) {
   return document.querySelector('.sq[data-square="' + sq + '"]');
 }
 
 function clearHighlights() {
-  document.querySelectorAll(".sq.selected, .sq.target").forEach(el => {
-    el.classList.remove("selected", "target");
+  document.querySelectorAll(".sq.selected, .sq.target, .sq.hint").forEach(el => {
+    el.classList.remove("selected", "target", "hint");
   });
 }
 
@@ -178,6 +191,21 @@ function drawBoard(fen) {
       div.addEventListener("click", () => onSquareClick(sq));
       boardEl.appendChild(div);
     });
+  });
+
+  const ranksEl = document.getElementById("ranks");
+  ranksEl.innerHTML = "";
+  dispRanks.forEach(rank => {
+    const span = document.createElement("span");
+    span.textContent = rank;
+    ranksEl.appendChild(span);
+  });
+  const filesEl = document.getElementById("files");
+  filesEl.innerHTML = "";
+  dispFiles.forEach(file => {
+    const span = document.createElement("span");
+    span.textContent = file;
+    filesEl.appendChild(span);
   });
 }
 
@@ -267,13 +295,14 @@ async function submitAttempt(from, to, promotion) {
     return;
   }
 
+  const hintNote = hintUsed ? " (hint used)" : "";
   if (result.verdict === "best") {
-    feedback.textContent = "Correct! " + result.yourSan + " was the best move.";
+    feedback.textContent = "Correct! " + result.yourSan + " was the best move." + hintNote;
     feedback.className = "correct";
     currentFen = result.yourFen;
   } else if (result.verdict === "also_fine") {
     feedback.textContent = result.yourSan + " wasn't the top choice (" + result.bestSan +
-      " was), but the engine says it's still fine — about " + result.yourCpLoss + "cp behind.";
+      " was), but the engine says it's still fine — about " + result.yourCpLoss + "cp behind." + hintNote;
     feedback.className = "alsofine";
     currentFen = result.yourFen;
   } else {
@@ -285,15 +314,35 @@ async function submitAttempt(from, to, promotion) {
   drawBoard(currentFen);
 }
 
-document.getElementById("resetBtn").addEventListener("click", () => {
+function resetPosition() {
   attempted = false;
   selected = null;
   pendingTarget = null;
+  hintUsed = false;
+  document.getElementById("hintBtn").disabled = false;
   document.getElementById("promo").classList.remove("show");
   document.getElementById("feedback").textContent = "";
   document.getElementById("feedback").className = "";
   currentFen = DATA.fen;
   drawBoard(currentFen);
+}
+
+document.getElementById("resetBtn").addEventListener("click", resetPosition);
+
+document.getElementById("hintBtn").addEventListener("click", async () => {
+  if (attempted) return;
+  const btn = document.getElementById("hintBtn");
+  btn.disabled = true;
+  hintUsed = true;
+  const r = await fetch("/api/practice/" + MISTAKE_ID + "/hint");
+  const result = await r.json();
+  clearHighlights();
+  selected = null;
+  const sqEl = squareEl(result.square);
+  if (sqEl) sqEl.classList.add("hint");
+  const feedback = document.getElementById("feedback");
+  feedback.textContent = "Hint: move the " + (result.piece || "piece") + " on " + result.square + ".";
+  feedback.className = "thinking";
 });
 
 drawBoard(currentFen);

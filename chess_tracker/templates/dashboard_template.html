@@ -83,18 +83,13 @@ svg.trend .empty { fill: var(--muted); font-size: 12.5px; }
 .deltaworse { color: #c1507a; } .deltabetter { color: #3fa66f; } .deltaflat { color: var(--muted); }
 .note { font-size: 12px; color: var(--muted); margin-top: 4px; }
 .emptynote { font-size: 12.5px; color: var(--muted); }
-.poslist { display: flex; flex-direction: column; gap: 10px; }
-.posrow { border-bottom: 1px solid var(--border); padding-bottom: 8px; font-size: 12.5px; }
-.posrow:last-child { border-bottom: none; padding-bottom: 0; }
-.poshead { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
-.poscp { font-weight: 700; color: #c1507a; min-width: 60px; }
-.posmeta { color: var(--muted); }
-.poscat { margin-top: 2px; }
-.poslink { color: var(--accent); text-decoration: none; word-break: break-all; }
-.poslink:hover { text-decoration: underline; }
-.practicelink { display: block; margin-top: 3px; font-weight: 600; }
-.openrow { display: grid; grid-template-columns: 60px 1fr 70px; gap: 8px; align-items: center;
+.subhead { font-size: 11.5px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .03em; margin: 10px 0 2px; }
+.subhead:first-child { margin-top: 0; }
+.openrow { display: grid; grid-template-columns: 110px 1fr 70px; gap: 8px; align-items: center;
   font-size: 12.5px; margin: 3px 0; }
+td.practicecell a { color: var(--accent); text-decoration: none; font-size: 12px; }
+td.practicecell a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -165,11 +160,11 @@ if (location.protocol.indexOf("http") === 0) {
       <div class="tablewrap"><table id="table"></table></div>
     </div>
     <div class="panel">
-      <h2>By move number</h2>
+      <h2>By phase (errors per 100 games)</h2>
       <div class="tablewrap"><table id="moveTable"></table></div>
     </div>
     <div class="panel">
-      <h2>Time pressure</h2>
+      <h2>Time pressure (errors per 100 games)</h2>
       <div class="tablewrap"><table id="clockTable"></table></div>
       <div id="clockNotes"></div>
     </div>
@@ -181,11 +176,7 @@ if (location.protocol.indexOf("http") === 0) {
       <h2>Openings you play often</h2>
       <div id="openings"></div>
     </div>
-    <div class="panel">
-      <h2>Positions to review</h2>
-      <div id="positions"></div>
-    </div>
-    <div class="panel">
+    <div class="panel" id="gapsPanel">
       <h2>Biggest gaps</h2>
       <div class="refrow">reference player
         <select id="refSelect"></select>
@@ -274,17 +265,6 @@ function movesFor(sel) {
     return sumFacts(DATA.gamesFacts, sel, 1);
   }
   return sumFacts(DATA.movesFacts, sel);
-}
-
-// The union of any selected topFacts buckets' top rows, re-sorted and
-// re-sliced, equals the true top `limit` of that union: buckets are
-// disjoint and every row is sorted by the same total order
-// (cp_loss desc, end_time desc, id as a tiebreak), so no bucket needs to
-// store more than `limit` rows for this to be exact.
-function filterTop(sel, limit) {
-  const rows = rowsMatching(DATA.topFacts, sel);
-  rows.sort((a, b) => (b[5] - a[5]) || (b[6] - a[6]) || (b[7] - a[7]));
-  return rows.slice(0, limit);
 }
 </script>
 <script id="ui">
@@ -404,11 +384,10 @@ function trendSeries(sel, user, bkts) {
   });
 }
 
-function renderTrend(sel, users) {
+function renderTrend(sel, users, bkts) {
   const svgNS = "http://www.w3.org/2000/svg";
   const svg = document.getElementById("trendChart");
   svg.innerHTML = "";
-  const bkts = trendBuckets();
 
   if (!bkts.length || !users.length) {
     svg.setAttribute("viewBox", "0 0 400 100");
@@ -514,25 +493,25 @@ function renderTrend(sel, users) {
     : "";
 }
 
-// First-half-of-period vs second-half-of-period category deltas, for one
-// user. Ties in |delta| break on category name so the order is stable.
-function halfDeltasFor(sel, user) {
+// Category deltas between the two most recent buckets *of the currently
+// selected granularity* (Month/3 Months/6 Months/Year) -- e.g. this month
+// vs last month, or this quarter vs last, rather than an arbitrary
+// whole-period halfway split. Ties in |delta| break on category name so
+// the order is stable.
+function latestDeltasFor(sel, user, bkts) {
+  if (bkts.length < 2) return null;
+  const last = bkts[bkts.length - 1], prev = bkts[bkts.length - 2];
   const uSel = userSel(sel, user);
-  const gamesByMonth = groupFacts(DATA.gamesFacts, uSel, "month", DATA.lists.months, 0);
   const movesByMonth = groupFacts(DATA.movesFacts, uSel, "month", DATA.lists.months);
-  const monthsWithGames = DATA.lists.months.map((_, i) => i).filter(i => gamesByMonth[i] > 0);
-  if (monthsWithGames.length < 2) return null;
 
-  const half = Math.max(Math.floor(monthsWithGames.length / 2), 1);
-  const earlySet = new Set(monthsWithGames.slice(0, half));
-  const lateSet = new Set(monthsWithGames.slice(half));
-  const earlyMoves = [...earlySet].reduce((s, i) => s + movesByMonth[i], 0);
-  const lateMoves = [...lateSet].reduce((s, i) => s + movesByMonth[i], 0);
-  if (!earlyMoves || !lateMoves) return null;
+  const lastMoves = last.monthIdx.reduce((s, i) => s + movesByMonth[i], 0);
+  const prevMoves = prev.monthIdx.reduce((s, i) => s + movesByMonth[i], 0);
+  if (!lastMoves || !prevMoves) return null;
 
+  const lastSet = new Set(last.monthIdx), prevSet = new Set(prev.monthIdx);
   const dims = DATA.countFacts.dims;
   const moDim = dims.indexOf("month"), catDim = dims.indexOf("category");
-  const earlyCount = new Map(), lateCount = new Map();
+  const lastCount = new Map(), prevCount = new Map();
   outer:
   for (const row of DATA.countFacts.data) {
     for (let i = 0; i < dims.length; i++) {
@@ -541,30 +520,30 @@ function halfDeltasFor(sel, user) {
       if (f && !f.has(row[i])) continue outer;
     }
     const mo = row[moDim], cat = row[catDim], n = row[dims.length];
-    if (earlySet.has(mo)) earlyCount.set(cat, (earlyCount.get(cat) || 0) + n);
-    else if (lateSet.has(mo)) lateCount.set(cat, (lateCount.get(cat) || 0) + n);
+    if (lastSet.has(mo)) lastCount.set(cat, (lastCount.get(cat) || 0) + n);
+    else if (prevSet.has(mo)) prevCount.set(cat, (prevCount.get(cat) || 0) + n);
   }
 
-  const catIdxs = new Set([...earlyCount.keys(), ...lateCount.keys()]);
+  const catIdxs = new Set([...lastCount.keys(), ...prevCount.keys()]);
   const deltas = [...catIdxs].map(ci => {
-    const a = (earlyCount.get(ci) || 0) / earlyMoves * 100;
-    const b = (lateCount.get(ci) || 0) / lateMoves * 100;
+    const a = (prevCount.get(ci) || 0) / prevMoves * 100;
+    const b = (lastCount.get(ci) || 0) / lastMoves * 100;
     return { d: b - a, a, b, cat: DATA.lists.categories[ci] };
   });
   deltas.sort((x, y) => (Math.abs(y.d) - Math.abs(x.d)) || (x.cat < y.cat ? -1 : x.cat > y.cat ? 1 : 0));
-  return deltas.slice(0, 6);
+  return { rows: deltas.slice(0, 6), label: prev.key + " → " + last.key };
 }
 
-function renderHalfDeltas(sel, users) {
+function renderLatestDeltas(sel, users, bkts) {
   const el = document.getElementById("halfDeltas");
   el.innerHTML = "";
   users.forEach(user => {
-    const deltas = halfDeltasFor(sel, user);
-    if (!deltas || !deltas.length) return;
+    const result = latestDeltasFor(sel, user, bkts);
+    if (!result || !result.rows.length) return;
     const h3 = document.createElement("h3");
-    h3.textContent = user + " — first half of the selected period vs second half";
+    h3.textContent = user + " — " + result.label;
     el.appendChild(h3);
-    deltas.forEach(({ d, a, b, cat }) => {
+    result.rows.forEach(({ d, a, b, cat }) => {
       const row = document.createElement("div");
       row.className = "deltarow";
       const cls = d > DATA.meta.deltaEpsilon ? "deltaworse"
@@ -586,16 +565,29 @@ function renderMetricTable(elId, rowLabels, users, getValue) {
   rowLabels.forEach((label, ri) => {
     const vals = users.map(u => getValue(u, ri));
     if (vals.every(v => v === 0)) return;
-    tbody += "<tr><td>" + label + "</td>" + vals.map(v => "<td>" + v + "</td>").join("") + "</tr>";
+    tbody += "<tr><td>" + label + "</td>" +
+      vals.map(v => "<td>" + v.toFixed(1) + "</td>").join("") + "</tr>";
   });
   tbody += "</tbody>";
   table.innerHTML = thead + tbody;
 }
 
-function renderMoveTable(sel, users) {
-  renderMetricTable("moveTable", DATA.lists.moveBuckets, users, (user, ri) => {
-    const arr = groupFacts(DATA.moveBucketFacts, userSel(sel, user), "moveBucket", DATA.lists.moveBuckets);
-    return arr[ri];
+// Total games analysed for one player under the current filters -- the
+// shared "per 100 games" denominator for the phase and time-pressure
+// panels below. Not phase-filtered (gamesFacts has no phase dim), matching
+// how "games in scope" already works everywhere else in the app.
+function gamesForUser(sel, user) {
+  return sumFacts(DATA.gamesFacts, userSel(sel, user), 0);
+}
+
+function renderPhaseTable(sel, users) {
+  renderMetricTable("moveTable", DATA.lists.phases, users, (user, ri) => {
+    const uSel = userSel(sel, user);
+    const games = gamesForUser(sel, user);
+    if (!games) return 0;
+    const phaseSel = withOverride(uSel, { phase: new Set([ri]) });
+    const errors = sumFacts(DATA.countFacts, phaseSel);
+    return errors / games * 100;
   });
 }
 
@@ -606,14 +598,17 @@ function renderClockTable(sel, users) {
     const uSel = userSel(sel, user);
     const arr = groupFacts(DATA.clockBucketFacts, uSel, "clockBucket", DATA.lists.clockBuckets);
     const total = arr.reduce((a, b) => a + b, 0);
-    return { user, arr, total };
+    const games = gamesForUser(sel, user);
+    return { user, arr, total, games };
   });
   renderMetricTable("clockTable", DATA.lists.clockBuckets, users, (user, ri) => {
     const u = perUser.find(p => p.user === user);
-    return u.arr[ri];
+    return u.games ? u.arr[ri] / u.games * 100 : 0;
   });
   perUser.forEach(({ user, arr, total }) => {
     if (!total) return;
+    // The "low clock" alert is a proportion of clocked errors, unrelated to
+    // the per-100-games scaling used for display above.
     const underFirst = arr[0] / total;
     if (underFirst > DATA.meta.timePressureAlert) {
       const p = document.createElement("div");
@@ -634,7 +629,10 @@ function renderColourTc(sel, users) {
     h3.textContent = user;
     el.appendChild(h3);
 
-    const list = document.createElement("div");
+    const colourHead = document.createElement("div");
+    colourHead.className = "subhead";
+    colourHead.textContent = "By colour (errors per 100 moves)";
+    el.appendChild(colourHead);
     DATA.lists.colours.forEach((colour, ci) => {
       const colSel = withOverride(uSel, { colour: new Set([ci]) });
       const mv = sumFacts(DATA.colourMovesFacts, colSel);
@@ -644,8 +642,13 @@ function renderColourTc(sel, users) {
       row.className = "barrow";
       row.innerHTML = '<div class="barlabel">' + colour + '</div><div></div>' +
         '<div class="barvalue">' + (e / mv * 100).toFixed(2) + '</div>';
-      list.appendChild(row);
+      el.appendChild(row);
     });
+
+    const tcHead = document.createElement("div");
+    tcHead.className = "subhead";
+    tcHead.textContent = "By time control (errors per 100 moves)";
+    el.appendChild(tcHead);
     DATA.lists.timeClasses.forEach((tc, tci) => {
       if (!uSel.tc.has(tci)) return;
       const tcSel = withOverride(uSel, { tc: new Set([tci]) });
@@ -656,23 +659,64 @@ function renderColourTc(sel, users) {
       row.className = "barrow";
       row.innerHTML = '<div class="barlabel">' + tc + '</div><div></div>' +
         '<div class="barvalue">' + (e / mv * 100).toFixed(2) + '</div>';
-      list.appendChild(row);
+      el.appendChild(row);
     });
-    el.appendChild(list);
   });
 }
+
+// Best-effort ECO -> opening name lookup, exact codes only (no guessed
+// ranges) and limited to openings we're confident are correctly named.
+// Anything not in here just shows the bare code -- a missing name is much
+// better than a wrong one.
+const ECO_NAMES = {
+  A00: "Uncommon Opening", A04: "Réti Opening", A10: "English Opening",
+  A40: "Queen's Pawn Game", A45: "Indian Defense", A80: "Dutch Defense",
+  B00: "King's Pawn Opening", B01: "Scandinavian Defense",
+  B02: "Alekhine's Defense", B06: "Modern Defense", B07: "Pirc Defense",
+  B10: "Caro-Kann Defense", B20: "Sicilian Defense", B27: "Sicilian Defense",
+  C00: "French Defense", C20: "King's Pawn Game", C23: "Bishop's Opening",
+  C25: "Vienna Game", C30: "King's Gambit", C40: "King's Knight Opening",
+  C41: "Philidor Defense", C42: "Petrov's Defense", C44: "King's Pawn Game",
+  C45: "Scotch Game", C50: "Italian Game", C60: "Ruy Lopez",
+  D00: "Queen's Pawn Game", D02: "Queen's Pawn Game", D06: "Queen's Gambit",
+  D10: "Slav Defense", D20: "Queen's Gambit Accepted",
+  D30: "Queen's Gambit Declined", D70: "Grünfeld Defense",
+  E00: "Catalan Opening", E20: "Nimzo-Indian Defense",
+  E60: "King's Indian Defense",
+};
 
 function openingsFor(sel, user) {
   const uSel = userSel(sel, user);
   // ecoGamesFacts has no phase/severity/category dims, so this denominator
   // is games in scope, not phase-filtered -- reproducing the terminal
   // report's existing asymmetry with the (phase-filtered) numerator below.
-  const gamesByEco = groupFacts(DATA.ecoGamesFacts, uSel, "eco", DATA.lists.ecos);
-  const errByEco = groupFacts(DATA.ecoErrorFacts, uSel, "eco", DATA.lists.ecos);
-  return DATA.lists.ecos.map((eco, i) => ({ eco, games: gamesByEco[i], errors: errByEco[i] }))
-    .filter(r => r.games >= DATA.meta.ecoMinGames)
-    .sort((a, b) => (b.errors / b.games) - (a.errors / a.games))
-    .slice(0, DATA.meta.ecoTopN);
+  // colour is grouped alongside eco (not just filtered) because an ECO code
+  // alone doesn't say which side it was played from.
+  const gDims = DATA.ecoGamesFacts.dims;
+  const gEco = gDims.indexOf("eco"), gCol = gDims.indexOf("colour");
+  const gamesByKey = new Map();
+  for (const row of rowsMatching(DATA.ecoGamesFacts, uSel)) {
+    const key = row[gEco] + "_" + row[gCol];
+    gamesByKey.set(key, (gamesByKey.get(key) || 0) + row[gDims.length]);
+  }
+  const eDims = DATA.ecoErrorFacts.dims;
+  const eEco = eDims.indexOf("eco"), eCol = eDims.indexOf("colour");
+  const errByKey = new Map();
+  for (const row of rowsMatching(DATA.ecoErrorFacts, uSel)) {
+    const key = row[eEco] + "_" + row[eCol];
+    errByKey.set(key, (errByKey.get(key) || 0) + row[eDims.length]);
+  }
+  const rows = [];
+  for (const [key, games] of gamesByKey) {
+    if (games < DATA.meta.ecoMinGames) continue;
+    const [ecoIdx, colIdx] = key.split("_").map(Number);
+    rows.push({
+      eco: DATA.lists.ecos[ecoIdx], colour: DATA.lists.colours[colIdx],
+      games, errors: errByKey.get(key) || 0,
+    });
+  }
+  rows.sort((a, b) => (b.errors / b.games) - (a.errors / a.games));
+  return rows.slice(0, DATA.meta.ecoTopN);
 }
 
 function renderOpenings(sel, users) {
@@ -689,74 +733,14 @@ function renderOpenings(sel, users) {
     rows.forEach(r => {
       const row = document.createElement("div");
       row.className = "openrow";
-      row.innerHTML = '<span>' + r.eco + '</span><span>' + r.games + ' games</span>' +
+      const label = r.eco + " (" + r.colour + ")" + (ECO_NAMES[r.eco] ? " — " + ECO_NAMES[r.eco] : "");
+      row.innerHTML = '<span>' + label + '</span><span>' + r.games + ' games</span>' +
         '<span>' + (r.errors / r.games).toFixed(1) + '/game</span>';
       el.appendChild(row);
     });
   });
   if (!any) el.innerHTML = '<div class="emptynote">No opening played at least ' +
     DATA.meta.ecoMinGames + ' times under the current filters.</div>';
-}
-
-function renderPositions(sel, users) {
-  const el = document.getElementById("positions");
-  el.innerHTML = "";
-  const list = document.createElement("div");
-  list.className = "poslist";
-  let any = false;
-  users.forEach(user => {
-    const uSel = userSel(sel, user);
-    const top = filterTop(uSel, DATA.meta.topPositions);
-    if (!top.length) return;
-    any = true;
-    const h3 = document.createElement("h3");
-    h3.textContent = user;
-    list.appendChild(h3);
-    top.forEach(row => {
-      const [, tc, ph, , cat, cpLoss, , mistakeId, date, moveNumber, played, best, clockSeconds, gameUrl] = row;
-      const occurrences = sumFacts(DATA.countFacts,
-        withOverride(uSel, { category: new Set([cat]) }));
-      const posrow = document.createElement("div");
-      posrow.className = "posrow";
-      const head = document.createElement("div");
-      head.className = "poshead";
-      const cp = document.createElement("span");
-      cp.className = "poscp";
-      cp.textContent = "-" + cpLoss + "cp";
-      const meta = document.createElement("span");
-      meta.className = "posmeta";
-      meta.textContent = date + " · move " + moveNumber + " · played " + played +
-        " · best " + best + " · clock " + (clockSeconds != null ? Math.round(clockSeconds) + "s" : "?") +
-        " · (" + occurrences + " times)";
-      head.appendChild(cp);
-      head.appendChild(meta);
-      const catLine = document.createElement("div");
-      catLine.className = "poscat";
-      catLine.textContent = DATA.lists.categories[cat];
-      const link = document.createElement("a");
-      link.className = "poslink";
-      link.href = gameUrl;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.textContent = gameUrl;
-      const practiceLink = document.createElement("a");
-      practiceLink.className = "poslink practicelink";
-      practiceLink.href = "/practice/" + mistakeId + "?users=" + encodeURIComponent(user) +
-        "&tc=" + encodeURIComponent(DATA.lists.timeClasses[tc]) +
-        "&phase=" + encodeURIComponent(DATA.lists.phases[ph]);
-      practiceLink.textContent = "Practice this position";
-      posrow.appendChild(head);
-      posrow.appendChild(catLine);
-      posrow.appendChild(link);
-      posrow.appendChild(practiceLink);
-      list.appendChild(posrow);
-    });
-  });
-  if (!any) {
-    el.innerHTML = '<div class="emptynote">No mistakes for the current filters.</div>';
-  } else {
-    el.appendChild(list);
-  }
 }
 
 function render() {
@@ -786,8 +770,9 @@ function render() {
     barsEl.appendChild(row);
   });
 
-  renderTrend(sel, users);
-  renderHalfDeltas(sel, users);
+  const bkts = trendBuckets();
+  renderTrend(sel, users, bkts);
+  renderLatestDeltas(sel, users, bkts);
 
   const rateRows = cats.map(c => ({ c, vals: users.map(u => rateOf(sel, u, c)) }));
   rateRows.sort((a, b) => {
@@ -796,36 +781,51 @@ function render() {
     return gapB - gapA;
   });
 
+  // A "Practice" link per category only makes sense pointed at one player;
+  // with several selected, whose queue would it open? So it only appears
+  // with exactly one player selected.
+  const showPractice = users.length === 1;
   const table = document.getElementById("table");
-  let thead = "<thead><tr><th>mistake type</th>" + users.map(u => "<th>" + u + "</th>").join("") + "</tr></thead>";
+  let thead = "<thead><tr><th>mistake type</th>" + users.map(u => "<th>" + u + "</th>").join("") +
+    (showPractice ? "<th></th>" : "") + "</tr></thead>";
   let tbody = "<tbody>";
   tbody += '<tr class="total-row"><td>ALL ERRORS</td>' +
-    totals.map(t => "<td>" + (t.r == null ? "–" : t.r.toFixed(2)) + "</td>").join("") + "</tr>";
+    totals.map(t => "<td>" + (t.r == null ? "–" : t.r.toFixed(2)) + "</td>").join("") +
+    (showPractice ? "<td></td>" : "") + "</tr>";
   rateRows.forEach(r => {
     const numeric = r.vals.filter(v => v != null);
     const maxV = numeric.length ? Math.max(...numeric) : null;
-    tbody += "<tr><td>" + r.c + "</td>" + r.vals.map(v => {
+    let rowHtml = "<tr><td>" + r.c + "</td>" + r.vals.map(v => {
       const cls = (v != null && maxV != null && v === maxV && users.length > 1) ? "maxcell" : "";
       return '<td class="' + cls + '">' + (v == null ? "–" : v.toFixed(2)) + "</td>";
-    }).join("") + "</tr>";
+    }).join("");
+    if (showPractice) {
+      const href = "/practice?users=" + encodeURIComponent(users[0]) +
+        "&category=" + encodeURIComponent(r.c);
+      rowHtml += '<td class="practicecell"><a href="' + href + '">Practice</a></td>';
+    }
+    tbody += rowHtml + "</tr>";
   });
   tbody += "</tbody>";
   table.innerHTML = thead + tbody;
 
-  renderMoveTable(sel, users);
+  renderPhaseTable(sel, users);
   renderClockTable(sel, users);
   renderColourTc(sel, users);
   renderOpenings(sel, users);
-  renderPositions(sel, users);
 
-  const refSel = document.getElementById("refSelect");
-  if (!users.includes(state.ref)) state.ref = users[0] || DATA.lists.users[0];
-  refSel.innerHTML = users.map(u =>
-    '<option value="' + u + '"' + (u === state.ref ? " selected" : "") + ">" + u + "</option>").join("");
+  const gapsPanel = document.getElementById("gapsPanel");
+  if (users.length < 2) {
+    gapsPanel.style.display = "none";
+  } else {
+    gapsPanel.style.display = "";
+    const refSel = document.getElementById("refSelect");
+    if (!users.includes(state.ref)) state.ref = users[0];
+    refSel.innerHTML = users.map(u =>
+      '<option value="' + u + '"' + (u === state.ref ? " selected" : "") + ">" + u + "</option>").join("");
 
-  const gapsEl = document.getElementById("gaps");
-  gapsEl.innerHTML = "";
-  if (users.length >= 2 && state.ref) {
+    const gapsEl = document.getElementById("gaps");
+    gapsEl.innerHTML = "";
     const others = users.filter(u => u !== state.ref);
     const gaps = cats.map(c => {
       const refR = rateOf(sel, state.ref, c) ?? 0;
@@ -844,8 +844,6 @@ function render() {
     } else {
       gapsEl.textContent = "No positive gaps for " + state.ref + " under the current filters.";
     }
-  } else {
-    gapsEl.textContent = "Select at least two players to see gaps.";
   }
 }
 

@@ -91,6 +91,30 @@ def save_settings(request: Request, email: str = Form(""), depth: int = Form(14)
     return RedirectResponse("/settings?saved=1", status_code=303)
 
 
+@router.get("/analyse-more", response_class=HTMLResponse)
+def analyse_more_page(request: Request):
+    conn = open_db(request.app.state.db_path)
+    try:
+        settings = get_settings(conn)
+    finally:
+        conn.close()
+    return templates.TemplateResponse(request, "analyse_more.html",
+        {"settings": settings, "error": None})
+
+
+def _origin_error(request: Request, origin: str, message: str, status_code: int):
+    if origin == "analyse_more":
+        conn = open_db(request.app.state.db_path)
+        try:
+            settings = get_settings(conn)
+        finally:
+            conn.close()
+        return templates.TemplateResponse(request, "analyse_more.html",
+            {"settings": settings, "error": message}, status_code=status_code)
+    return templates.TemplateResponse(
+        request, "home.html", _hub_context(request, message), status_code=status_code)
+
+
 @router.post("/jobs")
 def start_job(
     request: Request,
@@ -103,13 +127,11 @@ def start_job(
     since: str = Form(""),
     time_class: str = Form(""),
     limit: str = Form(""),
+    origin: str = Form("home"),
 ):
     users = [u.strip() for u in user.split(",") if u.strip()]
     if not users:
-        return templates.TemplateResponse(
-            request, "home.html",
-            _hub_context(request, "Enter at least one Chess.com username."),
-            status_code=400)
+        return _origin_error(request, origin, "Enter at least one Chess.com username.", 400)
     if not email.strip():
         # Neither the Analyse nor Analyse-more-players form shows an email
         # field any more (it's a saved setting) -- there's nothing to fix
@@ -118,8 +140,7 @@ def start_job(
 
     engine_path = request.app.state.engine_path or find_engine()
     if not engine_path or not os.path.isfile(engine_path):
-        return templates.TemplateResponse(
-            request, "home.html", _hub_context(request, ENGINE_HELP), status_code=400)
+        return _origin_error(request, origin, ENGINE_HELP, 400)
 
     try:
         status = request.app.state.jobs.start_job(
@@ -129,8 +150,7 @@ def start_job(
             limit=int(limit) if limit.strip() else None,
             min_loss=min_loss)
     except JobAlreadyRunningError as exc:
-        return templates.TemplateResponse(
-            request, "home.html", _hub_context(request, str(exc)), status_code=409)
+        return _origin_error(request, origin, str(exc), 409)
 
     return RedirectResponse(f"/jobs/{status.id}", status_code=303)
 

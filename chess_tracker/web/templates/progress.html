@@ -44,8 +44,8 @@ async function poll() {
   cancelBtn.disabled = true;
   if (s.state === "done") {
     bar.style.width = "100%";
-    statusText.textContent = "Done.";
-    result.innerHTML = dashboardLink(s.users);
+    statusText.textContent = "Done — opening the dashboard…";
+    window.location.href = "/dashboard?users=" + encodeURIComponent(s.users.join(","));
   } else if (s.state === "cancelled") {
     statusText.textContent = "Cancelled. Everything analysed so far was saved.";
     result.innerHTML = dashboardLink(s.users);

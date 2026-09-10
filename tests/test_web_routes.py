@@ -245,6 +245,23 @@ def test_practice_attempt_404s_for_unknown_mistake(tmp_path):
     assert r.status_code == 404
 
 
+def test_practice_hint_reveals_only_the_source_square_and_piece(tmp_path):
+    client = TestClient(create_app(_practice_seeded_db(tmp_path)))
+    r = client.get("/api/practice/1/hint")
+    assert r.status_code == 200
+    body = r.json()
+    # best="e4" from the start position is a pawn push from e2
+    assert body == {"square": "e2", "piece": "pawn"}
+    assert "best" not in body
+    assert "bestSan" not in body
+
+
+def test_practice_hint_404s_for_unknown_mistake(tmp_path):
+    client = TestClient(create_app(_practice_seeded_db(tmp_path)))
+    r = client.get("/api/practice/999/hint")
+    assert r.status_code == 404
+
+
 def test_home_page_lists_tracked_users(tmp_path):
     client = TestClient(create_app(_seeded_db(tmp_path)))
     r = client.get("/")
