@@ -60,10 +60,11 @@
 <div class="panel">
   <h2>Other tracked players</h2>
   <table>
-    <thead><tr><th>User</th><th>Games</th><th>Err/100</th><th></th></tr></thead>
+    <thead><tr><th></th><th>User</th><th>Games</th><th>Err/100</th><th></th></tr></thead>
     <tbody>
       {% for u in others %}
       <tr>
+        <td><input type="checkbox" class="compare-check" value="{{ u.username }}"></td>
         <td>{{ u.username }}{% if u.thin_sample %} <span class="muted">(thin)</span>{% endif %}</td>
         <td>{{ u.games }}</td>
         <td>{{ "%.2f"|format(u.error_rate) }}</td>
@@ -73,7 +74,22 @@
       {% endfor %}
     </tbody>
   </table>
+  <div class="btnrow">
+    <button type="button" id="compareBtn" class="btn-secondary" disabled>Compare selected with {{ primary_user }}</button>
+  </div>
 </div>
+<script>
+const compareChecks = document.querySelectorAll(".compare-check");
+const compareBtn = document.getElementById("compareBtn");
+compareChecks.forEach(c => c.addEventListener("change", () => {
+  compareBtn.disabled = !Array.from(compareChecks).some(c => c.checked);
+}));
+compareBtn.addEventListener("click", () => {
+  const checked = Array.from(compareChecks).filter(c => c.checked).map(c => c.value);
+  const users = [{{ primary_user|tojson }}, ...checked];
+  window.location.href = "/dashboard?users=" + encodeURIComponent(users.join(","));
+});
+</script>
 {% endif %}
 {% endif %}
 {% endblock %}

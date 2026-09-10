@@ -397,6 +397,21 @@ def test_home_page_shows_hub_once_primary_user_is_set(tmp_path):
     assert "Which account is yours?" not in r.text
     assert "alice" in r.text
     assert 'href="/practice?users=alice"' in r.text
+
+
+def test_home_page_shows_compare_picker_for_other_tracked_players(tmp_path):
+    db_path = str(tmp_path / "compare.db")
+    conn = open_db(db_path)
+    save_game(conn, REC, [MISTAKE], depth=14)
+    save_game(conn, {**REC, "username": "bob"}, [], depth=14)
+    set_settings(conn, primary_user="alice")
+    conn.close()
+
+    client = TestClient(create_app(db_path))
+    r = client.get("/")
+    assert r.status_code == 200
+    assert 'class="compare-check" value="bob"' in r.text
+    assert "Compare selected with alice" in r.text
     assert 'href="/achievements?users=alice"' in r.text
 
 
