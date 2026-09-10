@@ -26,7 +26,9 @@
 .promo button { margin-top: 0; }
 #feedback { margin: 12px 0; font-size: 13.5px; min-height: 1.5em; }
 #feedback.correct { color: #3fa66f; }
+#feedback.alsofine { color: #c9a227; }
 #feedback.wrong { color: var(--danger); }
+#feedback.thinking { color: var(--muted); font-style: italic; }
 .practicenav { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
 .practicenav button, .practicenav a.button-link { margin-top: 0; }
 </style>
@@ -206,13 +208,16 @@ document.getElementById("promo").addEventListener("click", e => {
 async function submitAttempt(from, to, promotion) {
   attempted = true;
   clearHighlights();
+  const feedback = document.getElementById("feedback");
+  feedback.textContent = "Checking with the engine…";
+  feedback.className = "thinking";
+
   const r = await fetch("/api/practice/" + MISTAKE_ID + "/attempt", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ from, to, promotion }),
   });
   const result = await r.json();
-  const feedback = document.getElementById("feedback");
 
   if (!result.legal) {
     feedback.textContent = "That move isn't legal here — try again.";
@@ -222,14 +227,20 @@ async function submitAttempt(from, to, promotion) {
     return;
   }
 
-  if (result.correct) {
+  if (result.verdict === "best") {
     feedback.textContent = "Correct! " + result.yourSan + " was the best move.";
     feedback.className = "correct";
+    currentFen = result.yourFen;
+  } else if (result.verdict === "also_fine") {
+    feedback.textContent = result.yourSan + " wasn't the top choice (" + result.bestSan +
+      " was), but the engine says it's still fine — about " + result.yourCpLoss + "cp behind.";
+    feedback.className = "alsofine";
+    currentFen = result.yourFen;
   } else {
     feedback.textContent = "You played " + result.yourSan + " — the best move was " + result.bestSan + ".";
     feedback.className = "wrong";
+    currentFen = result.bestFen;
   }
-  currentFen = result.correct ? result.yourFen : result.bestFen;
   selected = null;
   drawBoard(currentFen);
 }

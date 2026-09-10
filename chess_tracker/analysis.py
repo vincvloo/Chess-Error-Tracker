@@ -19,6 +19,16 @@ INACCURACY = 50
 MISTAKE = 100
 BLUNDER = 250
 
+# Stockfish scores a forced mate as a flat 10,000 stand-in (see score_cp()'s
+# mate_score), so a move stepping toward mate can otherwise produce a
+# cp_loss far larger than any real material blunder. This keeps that from
+# dominating aggregates/rankings while leaving real headroom above ordinary
+# blunders (losing a queen is ~900) -- comfortably below the mate stand-in.
+# Applies to newly analysed games only: only the capped value is ever
+# stored, so raising this cannot recover the true severity of a mistake
+# already analysed under the old cap.
+CP_LOSS_CAP = 5000
+
 PHASES = ("opening", "middlegame", "endgame")
 
 PIECE_VALUE = {
@@ -215,7 +225,7 @@ def analyse_game(game_json: dict, user: str, engine: chess.engine.SimpleEngine,
                 "phase": game_phase(board_before, move_no),
                 "severity": ("blunder" if cp_loss >= BLUNDER
                              else "mistake" if cp_loss >= MISTAKE else "inaccuracy"),
-                "cp_loss": min(cp_loss, 2000),
+                "cp_loss": min(cp_loss, CP_LOSS_CAP),
                 "category": classify(board_before, played, best, me, reply,
                                      cp_before, cp_after),
                 "played": board_before.san(played),
