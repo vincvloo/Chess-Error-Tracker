@@ -31,6 +31,10 @@
 #feedback.thinking { color: var(--muted); font-style: italic; }
 .practicenav { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
 .practicenav button, .practicenav a.button-link { margin-top: 0; }
+.ownertag { font-weight: 600; color: var(--accent); }
+.extendprompt { margin-top: 14px; padding: 10px 12px; background: var(--accent-soft);
+  border-radius: 8px; font-size: 12.5px; }
+.extendprompt a.button-link { margin-left: 6px; }
 </style>
 {% endblock %}
 {% block content %}
@@ -40,13 +44,36 @@
   <p class="muted">No stored mistakes to practice for {{ username }} under this filter.</p>
   <a class="button-link" href="/">Back home</a>
 </div>
+
+{% elif pickCategory %}
+<div class="panel">
+  <h2>{{ username }} &mdash; what do you want to work on?</h2>
+  {% if categories %}
+  <table>
+    <thead><tr><th>category</th><th>count</th><th></th></tr></thead>
+    <tbody>
+      {% for cat, n in categories %}
+      <tr>
+        <td>{{ cat }}</td><td>{{ n }}</td>
+        <td><a class="button-link"
+              href="/practice?users={{ username }}&tc={{ tc }}&phase={{ phase }}&category={{ cat }}">Practice this</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No stored mistakes/blunders for {{ username }} yet.</p>
+  {% endif %}
+</div>
+
 {% else %}
 <div class="panel">
   <div class="practicehead">
     <div>
       <h2 style="margin:0">{{ username }} &mdash; position {{ data.queuePosition }} of {{ data.queueTotal }}</h2>
       <div class="muted">move {{ data.moveNumber }}, {{ data.phase }}, {{ data.colour }} to move
-        &middot; -{{ data.cpLoss }}cp &middot; {{ data.category }}</div>
+        &middot; -{{ data.cpLoss }}cp &middot; {{ data.category }}
+        {% if data.owner != username %} &middot; <span class="ownertag">@{{ data.owner }}</span>{% endif %}</div>
     </div>
     <a class="button-link" href="{{ data.gameUrl }}" target="_blank" rel="noopener noreferrer">Game</a>
   </div>
@@ -63,9 +90,17 @@
 
   <div class="practicenav">
     <button type="button" id="resetBtn">Try again</button>
-    {% if data.prevId %}<a class="button-link" href="/practice/{{ data.prevId }}?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}">&larr; Previous</a>{% endif %}
-    {% if data.nextId %}<a class="button-link" id="nextLink" href="/practice/{{ data.nextId }}?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}">Next position &rarr;</a>{% else %}<span class="muted">That's the last one in this queue.</span>{% endif %}
+    {% if data.prevId %}<a class="button-link" href="/practice/{{ data.prevId }}?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}&category={{ data.categoryFilter|default('') }}{% if data.extended %}&extend=1{% endif %}">&larr; Previous</a>{% endif %}
+    {% if data.nextId %}<a class="button-link" id="nextLink" href="/practice/{{ data.nextId }}?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}&category={{ data.categoryFilter|default('') }}{% if data.extended %}&extend=1{% endif %}">Next position &rarr;</a>{% else %}<span class="muted">That's the last one in this queue.</span>{% endif %}
   </div>
+
+  {% if data.nearEnd %}
+  <div class="extendprompt">
+    Running low on {{ username }}'s own positions for this category — {{ data.poolAvailable }}
+    more from other tracked players making the same mistake are available.
+    <a class="button-link" href="{{ data.extendUrl }}">Include them</a>
+  </div>
+  {% endif %}
 </div>
 
 <script>

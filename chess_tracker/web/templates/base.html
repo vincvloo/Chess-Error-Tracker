@@ -43,11 +43,25 @@ button:disabled { opacity: 0.5; cursor: default; }
   padding: 10px 14px; margin-bottom: 14px; font-size: 13px; white-space: pre-wrap; }
 a.button-link { display: inline-block; margin-top: 4px; font-size: 12.5px; color: var(--accent); }
 .muted { color: var(--muted); }
+.headerrow { display: flex; justify-content: space-between; align-items: baseline; }
+.navlink { font-size: 12.5px; color: var(--muted); text-decoration: none; }
+.navlink:hover { color: var(--accent); }
+.actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px; margin-top: 4px; }
+.actioncard { display: block; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 14px; text-align: center; text-decoration: none;
+  color: var(--text); font-weight: 600; font-size: 13.5px; }
+.actioncard:hover { border-color: var(--accent); color: var(--accent); }
+.actioncard .sub { display: block; font-weight: 400; color: var(--muted); font-size: 11.5px;
+  margin-top: 3px; }
 </style>
 {% block head %}{% endblock %}
 </head>
 <body>
-<header><h1><a href="/">Chess Error Tracker</a></h1></header>
+<header class="headerrow">
+  <h1><a href="/">Chess Error Tracker</a></h1>
+  <a class="navlink" href="/settings">Settings</a>
+</header>
 <main>
 {% block content %}{% endblock %}
 </main>

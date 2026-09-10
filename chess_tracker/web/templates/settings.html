@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Settings - Chess Error Tracker{% endblock %}
+{% block content %}
+{% if needs_email %}
+<div class="error">An email is required by Chess.com before fetching games. Set it below, then try Analyse again.</div>
+{% endif %}
+{% if saved %}
+<div class="panel" style="background:var(--accent-soft);border-color:var(--accent)">Saved.</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Parameters</h2>
+  <p class="muted">Used by Analyse and Analyse-more-players on the home page, so you don't have to
+    re-enter them every time.</p>
+  <form method="post" action="/settings">
+    <label>Contact email (required by Chess.com)</label>
+    <input type="email" name="email" required value="{{ settings.email }}">
+    <div class="row">
+      <div>
+        <label>Depth</label>
+        <input type="number" name="depth" value="{{ settings.depth }}">
+      </div>
+      <div>
+        <label>Threads</label>
+        <input type="number" name="threads" value="{{ settings.threads }}">
+      </div>
+      <div>
+        <label>Pause (s)</label>
+        <input type="number" step="0.1" name="pause" value="{{ settings.pause }}">
+      </div>
+      <div>
+        <label>Min loss (cp)</label>
+        <input type="number" name="min_loss" value="{{ settings.min_loss }}">
+      </div>
+    </div>
+    <button type="submit">Save</button>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Account</h2>
+  <p class="muted">Currently: <strong>{{ settings.primary_user or "not set" }}</strong></p>
+  <form method="post" action="/account">
+    <label>Change which account is yours</label>
+    <input type="text" name="username" placeholder="yourname" value="{{ settings.primary_user }}">
+    <button type="submit">Update</button>
+  </form>
+</div>
+{% endblock %}

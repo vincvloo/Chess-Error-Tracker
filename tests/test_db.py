@@ -1,4 +1,4 @@
-from chess_tracker.db import already_analysed, open_db, save_game
+from chess_tracker.db import already_analysed, get_settings, open_db, save_game, set_settings
 
 _REC = {
     "url": "https://example.com/g1", "username": "alice", "end_time": 1000,
@@ -56,3 +56,34 @@ def test_save_game_replaces_earlier_shallower_analysis():
     assert len(mistakes) == 1
     assert mistakes[0]["category"] == "positional or planning error"
     assert already_analysed(conn, _REC["url"], "alice", 18) is True
+
+
+def test_get_settings_returns_defaults_when_nothing_stored():
+    conn = open_db(":memory:")
+    settings = get_settings(conn)
+    assert settings["primary_user"] is None
+    assert settings["email"] == ""
+    assert settings["depth"] == 14
+    assert settings["threads"] == 2
+    assert settings["pause"] == 0.6
+    assert settings["min_loss"] == 50  # INACCURACY
+
+
+def test_set_settings_upserts_and_casts_back_to_the_default_type():
+    conn = open_db(":memory:")
+    set_settings(conn, primary_user="alice", email="alice@example.com", depth=16, pause=0.8)
+    settings = get_settings(conn)
+    assert settings["primary_user"] == "alice"
+    assert settings["email"] == "alice@example.com"
+    assert settings["depth"] == 16
+    assert isinstance(settings["depth"], int)
+    assert settings["pause"] == 0.8
+    assert isinstance(settings["pause"], float)
+    # untouched settings still fall back to their defaults
+    assert settings["threads"] == 2
+
+    # a second call overwrites rather than duplicating
+    set_settings(conn, depth=20)
+    settings = get_settings(conn)
+    assert settings["depth"] == 20
+    assert settings["primary_user"] == "alice"  # earlier settings untouched

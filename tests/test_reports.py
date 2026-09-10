@@ -8,6 +8,7 @@ from chess_tracker.reports import (
     _scope,
     clock_bucket,
     move_bucket,
+    practice_pool,
     practice_queue,
     report,
     report_model,
@@ -467,3 +468,57 @@ def test_practice_queue_empty_for_a_user_with_no_serious_mistakes():
         _mistake("https://x/g1", severity="inaccuracy", cp_loss=60, move_number=1),
     ], depth=14)
     assert practice_queue(conn, "alice") == []
+
+
+def test_practice_queue_filters_by_category():
+    conn = open_db(":memory:")
+    save_game(conn, _game("https://x/g1"), [
+        _mistake("https://x/g1", cp_loss=2000, move_number=1, category="hung a piece"),
+        _mistake("https://x/g1", cp_loss=1900, move_number=2, category="missed tactic"),
+    ], depth=14)
+
+    hung = practice_queue(conn, "alice", category="hung a piece")
+    assert [m["move_number"] for m in hung] == [1]
+
+    tactic = practice_queue(conn, "alice", category="missed tactic")
+    assert [m["move_number"] for m in tactic] == [2]
+
+
+def test_practice_pool_pools_other_users_excluding_the_given_one():
+    conn = open_db(":memory:")
+    save_game(conn, _game("https://x/a1", username="alice"), [
+        _mistake("https://x/a1", username="alice", cp_loss=2000, move_number=1,
+                 category="hung a piece"),
+    ], depth=14)
+    save_game(conn, _game("https://x/b1", username="bob"), [
+        _mistake("https://x/b1", username="bob", cp_loss=1900, move_number=2,
+                 category="hung a piece"),
+        _mistake("https://x/b1", username="bob", cp_loss=1800, move_number=3,
+                 category="missed tactic"),
+    ], depth=14)
+
+    pool = practice_pool(conn, "hung a piece", exclude_user="alice")
+    assert [m["username"] for m in pool] == ["bob"]
+    assert [m["move_number"] for m in pool] == [2]
+
+    pool_including_alice = practice_pool(conn, "hung a piece")
+    assert sorted(m["username"] for m in pool_including_alice) == ["alice", "bob"]
+
+
+def test_practice_pool_respects_ordering_and_scope():
+    conn = open_db(":memory:")
+    save_game(conn, _game("https://x/b1", username="bob", time_class="blitz"), [
+        _mistake("https://x/b1", username="bob", time_class="blitz", cp_loss=2000,
+                 end_time=2000, date="2024-01-02", move_number=1, category="hung a piece"),
+    ], depth=14)
+    save_game(conn, _game("https://x/b2", username="bob", time_class="rapid"), [
+        _mistake("https://x/b2", username="bob", time_class="rapid", cp_loss=2000,
+                 end_time=1000, date="2024-01-01", move_number=2, category="hung a piece"),
+    ], depth=14)
+
+    blitz_only = practice_pool(conn, "hung a piece", time_class="blitz")
+    assert [m["move_number"] for m in blitz_only] == [1]
+
+    both = practice_pool(conn, "hung a piece")
+    # tied cp_loss -> most recent (move 1, end_time 2000) first
+    assert [m["move_number"] for m in both] == [1, 2]
