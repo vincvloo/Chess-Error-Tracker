@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import chess
 import chess.engine
 from fastapi import APIRouter, Request
@@ -100,12 +102,14 @@ async def practice_attempt(request: Request, mistake_id: int):
     body = await request.json()
     from_sq, to_sq = body.get("from"), body.get("to")
     promotion = body.get("promotion") or ""
+    practicing_user = (body.get("practicingUser") or "").strip().lower()
+    hint_used = bool(body.get("hintUsed"))
     if not from_sq or not to_sq:
         return JSONResponse({"error": "from and to are required"}, status_code=400)
 
     conn = open_db(request.app.state.db_path)
     try:
-        row = conn.execute("SELECT fen, best FROM mistakes WHERE id = ?",
+        row = conn.execute("SELECT fen, best, username, category FROM mistakes WHERE id = ?",
                            (mistake_id,)).fetchone()
     finally:
         conn.close()
@@ -143,5 +147,47 @@ async def practice_attempt(request: Request, mistake_id: int):
         result["verdict"] = verdict
         result["yourCpLoss"] = your_cp_loss
 
+    if practicing_user:
+        conn2 = open_db(request.app.state.db_path)
+        try:
+            conn2.execute(
+                "INSERT INTO practice_attempts "
+                "(practicing_user, mistake_id, owner, category, verdict, hint_used, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (practicing_user, mistake_id, row["username"], row["category"],
+                 result["verdict"], int(hint_used),
+                 datetime.now(timezone.utc).isoformat(timespec="seconds")))
+            conn2.commit()
+        finally:
+            conn2.close()
+
     result["correct"] = result["verdict"] == "best"  # kept for older clients
     return result
+
+
+@router.delete("/practice-attempts/{attempt_id}")
+def delete_practice_attempt(request: Request, attempt_id: int):
+    """Remove one logged attempt (a row in the Achievements "Recent practice
+    sessions" table) -- e.g. one you didn't mean to have tracked."""
+    conn = open_db(request.app.state.db_path)
+    try:
+        conn.execute("DELETE FROM practice_attempts WHERE id = ?", (attempt_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"deleted": True}
+
+
+@router.delete("/practice-attempts")
+def reset_practice_attempts(request: Request, user: str):
+    """Clear all of one player's practice-attempt history -- the "reset"
+    button on Achievements, for starting the solve-rate/progress stats over
+    from scratch."""
+    conn = open_db(request.app.state.db_path)
+    try:
+        conn.execute("DELETE FROM practice_attempts WHERE practicing_user = ?",
+                     (user.lower(),))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"deleted": True}

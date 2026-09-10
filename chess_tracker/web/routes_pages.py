@@ -14,7 +14,7 @@ from ..analysis import INACCURACY
 from ..db import get_settings, open_db, set_settings
 from ..engine import ENGINE_HELP, find_engine
 from ..html_export import render_dashboard_html
-from ..reports import practice_pool, practice_queue, report_model, user_summaries
+from ..reports import practice_pool, practice_queue, practice_stats, report_model, user_summaries
 from .jobs import JobAlreadyRunningError
 
 router = APIRouter()
@@ -183,11 +183,10 @@ def dashboard(request: Request, users: str = ""):
 @router.get("/achievements", response_class=HTMLResponse)
 def achievements_page(request: Request, users: str = ""):
     """
-    How each mistake category has moved over time, for one player. Built
-    entirely from report_model()'s existing recurring-category counts and
-    first-half/second-half trend deltas -- no new queries, no practice-
-    attempt tracking (that stays a documented future layer, not a
-    dependency of this page).
+    How each mistake category has moved over time, for one player, plus
+    practice-mode usage stats (practice_stats()): overall progress, solve
+    rate by category (yours vs. other players' via extend-to-others), hint
+    usage, and recent session history.
     """
     user = next((u.strip() for u in users.split(",") if u.strip()), None)
     conn = open_db(request.app.state.db_path)
@@ -196,6 +195,7 @@ def achievements_page(request: Request, users: str = ""):
             settings = get_settings(conn)
             user = settings["primary_user"]
         model = report_model(conn, user) if user else None
+        stats = practice_stats(conn, user) if user else None
     finally:
         conn.close()
 
@@ -214,6 +214,7 @@ def achievements_page(request: Request, users: str = ""):
         "n_serious": model["n_serious"], "recurring": model["recurring"],
         "improved": improved, "worsened": worsened,
         "has_trend": model["trend"] is not None,
+        "practice": stats,
     })
 
 
@@ -295,6 +296,7 @@ def practice_page(request: Request, mistake_id: int | None = None, users: str = 
         "cpLoss": row["cp_loss"],
         "gameUrl": row["game_url"],
         "owner": row["username"],
+        "practicingUser": user,
         "legalMoves": legal_moves,
         "queuePosition": index + 1,
         "queueTotal": len(queue),

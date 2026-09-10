@@ -88,9 +88,30 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT
 );
 
+-- Practice-mode attempt log. One row per real (legal) move attempt from
+-- /practice. owner/category are copied from the mistakes row at attempt
+-- time (not joined) so history survives save_game()'s delete-then-reinsert
+-- on reanalysis, which changes mistakes.id. No FK to mistakes(id): with
+-- PRAGMA foreign_keys=ON, a FK would block that delete outright. There is
+-- no stored "solved" flag -- a hint-free correct attempt on a given
+-- (practicing_user, mistake_id) counts as solved even if an earlier
+-- hint-assisted attempt on the same position did not (see practice_stats()
+-- in reports.py).
+CREATE TABLE IF NOT EXISTS practice_attempts (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    practicing_user  TEXT NOT NULL,
+    mistake_id       INTEGER NOT NULL,
+    owner            TEXT NOT NULL,
+    category         TEXT NOT NULL,
+    verdict          TEXT NOT NULL,
+    hint_used        INTEGER NOT NULL DEFAULT 0,
+    created_at       TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_mistakes_user ON mistakes(username);
 CREATE INDEX IF NOT EXISTS idx_mistakes_cat  ON mistakes(username, category);
 CREATE INDEX IF NOT EXISTS idx_games_user    ON games(username, end_time);
+CREATE INDEX IF NOT EXISTS idx_practice_attempts_user ON practice_attempts(practicing_user, mistake_id);
 """
 
 SETTINGS_DEFAULTS = {

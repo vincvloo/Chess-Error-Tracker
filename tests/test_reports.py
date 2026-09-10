@@ -10,6 +10,7 @@ from chess_tracker.reports import (
     move_bucket,
     practice_pool,
     practice_queue,
+    practice_stats,
     report,
     report_model,
 )
@@ -522,3 +523,150 @@ def test_practice_pool_respects_ordering_and_scope():
     both = practice_pool(conn, "hung a piece")
     # tied cp_loss -> most recent (move 1, end_time 2000) first
     assert [m["move_number"] for m in both] == [1, 2]
+
+
+# ---- practice_stats() ------------------------------------------------
+
+def _log_attempt(conn, practicing_user, mistake_id, owner, category, verdict,
+                 hint_used=False, created_at="2024-01-01T00:00:00+00:00"):
+    conn.execute(
+        "INSERT INTO practice_attempts "
+        "(practicing_user, mistake_id, owner, category, verdict, hint_used, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (practicing_user, mistake_id, owner, category, verdict, int(hint_used), created_at))
+
+
+def _mistake_ids(conn, username):
+    return [r["id"] for r in conn.execute(
+        "SELECT id FROM mistakes WHERE username = ? ORDER BY id", (username,)).fetchall()]
+
+
+def test_practice_stats_zero_attempts_returns_zeroed_dict_not_none():
+    conn = open_db(":memory:")
+    save_game(conn, _game("https://x/g1"), [
+        _mistake("https://x/g1", cp_loss=2000, move_number=1, category="hung a piece"),
+    ], depth=14)
+
+    stats = practice_stats(conn, "alice")
+    assert stats["overall"] == {"total": 1, "attempted": 0, "solved": 0}
+    assert stats["hint_rate"] is None
+    assert stats["recent"] == []
+
+
+def test_practice_stats_overall_total_is_not_capped_at_the_practice_queue_limit():
+    conn = open_db(":memory:")
+    save_game(conn, _game("https://x/g1", moves=1000, om=1000, mm=0, em=0), [
+        _mistake("https://x/g1", cp_loss=2000 - i, move_number=i + 1, category="a")
+        for i in range(PRACTICE_QUEUE_LIMIT + 20)
+    ], depth=14)
+
+    # practice_queue() itself is still capped (it's an ordering/display
+    # concern for practice mode), but the achievements total must not be.
+    assert len(practice_queue(conn, "alice")) == PRACTICE_QUEUE_LIMIT
+    assert practice_stats(conn, "alice")["overall"]["total"] == PRACTICE_QUEUE_LIMIT + 20
+
+
+def test_practice_stats_overall_progress():
+    conn = open_db(":memory:")
+    save_game(conn, _game("https://x/g1"), [
+        _mistake("https://x/g1", cp_loss=2000, move_number=1, category="a"),
+        _mistake("https://x/g1", cp_loss=1900, move_number=2, category="a"),
+    ], depth=14)
+    ids = _mistake_ids(conn, "alice")
+
+    _log_attempt(conn, "alice", ids[0], "alice", "a", "best")
+    _log_attempt(conn, "alice", ids[1], "alice", "a", "mistake")
+
+    stats = practice_stats(conn, "alice")
+    assert stats["overall"] == {"total": 2, "attempted": 2, "solved": 1}
+
+
+def test_practice_stats_hint_used_attempt_does_not_count_as_solved():
+    conn = open_db(":memory:")
+    save_game(conn, _game("https://x/g1"), [
+        _mistake("https://x/g1", cp_loss=2000, move_number=1, category="a"),
+    ], depth=14)
+    mistake_id = _mistake_ids(conn, "alice")[0]
+
+    _log_attempt(conn, "alice", mistake_id, "alice", "a", "best", hint_used=True)
+    assert practice_stats(conn, "alice")["overall"]["solved"] == 0
+
+    # A later hint-free attempt on the same position must flip it to solved.
+    _log_attempt(conn, "alice", mistake_id, "alice", "a", "best", hint_used=False)
+    assert practice_stats(conn, "alice")["overall"]["solved"] == 1
+
+
+def test_practice_stats_by_category_own_vs_others():
+    conn = open_db(":memory:")
+    save_game(conn, _game("https://x/a1", username="alice"), [
+        _mistake("https://x/a1", username="alice", cp_loss=2000, move_number=1,
+                 category="hung a piece"),
+    ], depth=14)
+    save_game(conn, _game("https://x/b1", username="bob", moves=1000, om=1000, mm=0, em=0), [
+        _mistake("https://x/b1", username="bob", cp_loss=2000 - i, move_number=i + 1,
+                 category="hung a piece")
+        for i in range(PRACTICE_QUEUE_LIMIT + 20)
+    ], depth=14)
+
+    alice_id = _mistake_ids(conn, "alice")[0]
+    bob_ids = _mistake_ids(conn, "bob")
+
+    _log_attempt(conn, "alice", alice_id, "alice", "hung a piece", "best")
+    _log_attempt(conn, "alice", bob_ids[0], "bob", "hung a piece", "best")
+
+    by_cat = {row["category"]: row for row in practice_stats(conn, "alice")["by_category"]}
+    row = by_cat["hung a piece"]
+    assert row["own_total"] == 1
+    assert row["own_solved"] == 1
+    assert row["own_rate"] == 1.0
+    # practice_pool() would cap this at PRACTICE_QUEUE_LIMIT -- the real
+    # count (bob's mistakes) must not be silently truncated to that limit.
+    assert row["others_total"] == PRACTICE_QUEUE_LIMIT + 20
+    assert row["others_solved"] == 1
+
+
+def test_practice_stats_category_with_zero_others_shows_none_rate():
+    conn = open_db(":memory:")
+    save_game(conn, _game("https://x/a1", username="alice"), [
+        _mistake("https://x/a1", username="alice", cp_loss=2000, move_number=1,
+                 category="hung a piece"),
+    ], depth=14)
+
+    by_cat = {row["category"]: row for row in practice_stats(conn, "alice")["by_category"]}
+    assert by_cat["hung a piece"]["others_total"] == 0
+    assert by_cat["hung a piece"]["others_rate"] is None
+
+
+def test_practice_stats_hint_rate_is_over_successful_attempts_only():
+    conn = open_db(":memory:")
+    save_game(conn, _game("https://x/g1"), [
+        _mistake("https://x/g1", cp_loss=2000, move_number=1, category="a"),
+        _mistake("https://x/g1", cp_loss=1900, move_number=2, category="a"),
+        _mistake("https://x/g1", cp_loss=1800, move_number=3, category="a"),
+    ], depth=14)
+    ids = _mistake_ids(conn, "alice")
+
+    _log_attempt(conn, "alice", ids[0], "alice", "a", "best", hint_used=True)
+    _log_attempt(conn, "alice", ids[1], "alice", "a", "also_fine", hint_used=False)
+    _log_attempt(conn, "alice", ids[2], "alice", "a", "mistake", hint_used=True)  # excluded
+
+    stats = practice_stats(conn, "alice")
+    assert stats["hint_sample"] == 2  # only the two successful attempts
+    assert stats["hint_rate"] == 0.5
+
+
+def test_practice_stats_recent_history_order_and_limit():
+    conn = open_db(":memory:")
+    save_game(conn, _game("https://x/g1", moves=1000, om=1000, mm=0, em=0), [
+        _mistake("https://x/g1", cp_loss=2000, move_number=i + 1, category="a")
+        for i in range(25)
+    ], depth=14)
+    ids = _mistake_ids(conn, "alice")
+
+    for i, mistake_id in enumerate(ids):
+        _log_attempt(conn, "alice", mistake_id, "alice", "a", "best",
+                    created_at=f"2024-01-{i + 1:02d}T00:00:00+00:00")
+
+    recent = practice_stats(conn, "alice")["recent"]
+    assert len(recent) == 20
+    assert recent[0]["created_at"] == "2024-01-25T00:00:00+00:00"  # newest first

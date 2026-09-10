@@ -262,6 +262,115 @@ def test_practice_hint_404s_for_unknown_mistake(tmp_path):
     assert r.status_code == 404
 
 
+# ---- practice attempt logging (practice_attempts table) -------------------
+
+def _attempt_rows(db_path):
+    conn = open_db(db_path)
+    rows = conn.execute("SELECT * FROM practice_attempts").fetchall()
+    conn.close()
+    return rows
+
+
+def test_practice_attempt_logs_a_row_when_practicing_user_given(tmp_path):
+    db_path = _practice_seeded_db(tmp_path)
+    client = TestClient(create_app(db_path))
+    r = client.post("/api/practice/1/attempt",
+                    json={"from": "e2", "to": "e4", "practicingUser": "alice", "hintUsed": False})
+    assert r.status_code == 200
+
+    rows = _attempt_rows(db_path)
+    assert len(rows) == 1
+    assert rows[0]["practicing_user"] == "alice"
+    assert rows[0]["mistake_id"] == 1
+    assert rows[0]["owner"] == "alice"
+    assert rows[0]["category"] == "hung a pawn"
+    assert rows[0]["verdict"] == "best"
+    assert rows[0]["hint_used"] == 0
+
+
+def test_practice_attempt_does_not_log_without_practicing_user(tmp_path):
+    db_path = _practice_seeded_db(tmp_path)
+    client = TestClient(create_app(db_path))
+    # same body as test_practice_attempt_correct_move -- no practicingUser --
+    # must keep behaving exactly as before, and must not log anything.
+    r = client.post("/api/practice/1/attempt", json={"from": "e2", "to": "e4"})
+    assert r.status_code == 200
+    assert _attempt_rows(db_path) == []
+
+
+def test_practice_attempt_does_not_log_illegal_moves(tmp_path):
+    db_path = _practice_seeded_db(tmp_path)
+    client = TestClient(create_app(db_path))
+    r = client.post("/api/practice/1/attempt",
+                    json={"from": "e2", "to": "e5", "practicingUser": "alice"})
+    assert r.json() == {"legal": False}
+    assert _attempt_rows(db_path) == []
+
+
+def test_practice_attempt_logs_hint_used_flag(tmp_path):
+    db_path = _practice_seeded_db(tmp_path)
+    client = TestClient(create_app(db_path))
+    r = client.post("/api/practice/1/attempt",
+                    json={"from": "d2", "to": "d4", "practicingUser": "alice", "hintUsed": True})
+    assert r.json()["verdict"] == "mistake"
+
+    rows = _attempt_rows(db_path)
+    assert len(rows) == 1
+    assert rows[0]["hint_used"] == 1
+    assert rows[0]["verdict"] == "mistake"
+
+
+def test_practice_attempt_hint_free_retry_flips_position_to_solved(tmp_path):
+    from chess_tracker.reports import practice_stats
+
+    db_path = _practice_seeded_db(tmp_path)
+    client = TestClient(create_app(db_path))
+
+    client.post("/api/practice/1/attempt",
+               json={"from": "e2", "to": "e4", "practicingUser": "alice", "hintUsed": True})
+    conn = open_db(db_path)
+    assert practice_stats(conn, "alice")["overall"]["solved"] == 0
+    conn.close()
+
+    client.post("/api/practice/1/attempt",
+               json={"from": "e2", "to": "e4", "practicingUser": "alice", "hintUsed": False})
+    conn = open_db(db_path)
+    assert practice_stats(conn, "alice")["overall"]["solved"] == 1
+    conn.close()
+
+
+def test_delete_one_practice_attempt(tmp_path):
+    db_path = _practice_seeded_db(tmp_path)
+    client = TestClient(create_app(db_path))
+    client.post("/api/practice/1/attempt",
+               json={"from": "e2", "to": "e4", "practicingUser": "alice"})
+    client.post("/api/practice/1/attempt",
+               json={"from": "d2", "to": "d4", "practicingUser": "alice"})
+    assert len(_attempt_rows(db_path)) == 2
+
+    attempt_id = _attempt_rows(db_path)[0]["id"]
+    r = client.delete(f"/api/practice-attempts/{attempt_id}")
+    assert r.status_code == 200
+
+    remaining = _attempt_rows(db_path)
+    assert len(remaining) == 1
+    assert remaining[0]["id"] != attempt_id
+
+
+def test_reset_all_practice_attempts_for_a_user(tmp_path):
+    db_path = _practice_seeded_db(tmp_path)
+    client = TestClient(create_app(db_path))
+    client.post("/api/practice/1/attempt",
+               json={"from": "e2", "to": "e4", "practicingUser": "alice"})
+    client.post("/api/practice/1/attempt",
+               json={"from": "d2", "to": "d4", "practicingUser": "alice"})
+    assert len(_attempt_rows(db_path)) == 2
+
+    r = client.delete("/api/practice-attempts", params={"user": "alice"})
+    assert r.status_code == 200
+    assert _attempt_rows(db_path) == []
+
+
 def test_home_page_lists_tracked_users(tmp_path):
     client = TestClient(create_app(_seeded_db(tmp_path)))
     r = client.get("/")
@@ -482,6 +591,31 @@ def test_achievements_page_shows_category_trend_deltas(tmp_path):
     assert "Most improved" in r.text
 
 
+def test_achievements_page_with_no_practice_attempts_shows_empty_practice_state(tmp_path):
+    db_path = _practice_seeded_db(tmp_path)
+    client = TestClient(create_app(db_path))
+    r = client.get("/achievements", params={"users": "alice"})
+    assert r.status_code == 200
+    assert "0 of 1 recorded positions" in r.text
+    assert "No successful attempts yet" in r.text
+    assert "No practice attempts recorded yet" in r.text
+
+
+def test_achievements_page_shows_practice_stats(tmp_path):
+    db_path = _practice_seeded_db(tmp_path)
+    client = TestClient(create_app(db_path))
+    client.post("/api/practice/1/attempt",
+               json={"from": "e2", "to": "e4", "practicingUser": "alice", "hintUsed": False})
+
+    r = client.get("/achievements", params={"users": "alice"})
+    assert r.status_code == 200
+    assert "1 of 1 recorded positions" in r.text
+    assert "1 solved" in r.text
+    assert "(100%)" in r.text
+    assert "Recent practice sessions" in r.text
+    assert "hung a pawn" in r.text
+
+
 # ---- practice: extend to other players' mistakes -------------------------
 
 def test_practice_extend_pulls_in_other_players_tagged_by_owner(tmp_path):
@@ -517,3 +651,29 @@ def test_practice_extend_pulls_in_other_players_tagged_by_owner(tmp_path):
     assert followed.status_code == 200
     assert "position 2 of 3" in followed.text
     assert "@bob" in followed.text  # a pooled row, tagged with its owner
+
+
+def test_achievements_page_others_column_uses_pooled_mistakes(tmp_path):
+    db_path = str(tmp_path / "extend_stats.db")
+    conn = open_db(db_path)
+    save_game(conn, _achievement_game("https://x/a1", "alice", "2024-01-01"),
+             [_achievement_mistake("https://x/a1", "alice", "2024-01-01", "hung a piece")],
+             depth=14)
+    save_game(conn, _achievement_game("https://x/b1", "bob", "2024-01-01"),
+             [_achievement_mistake("https://x/b1", "bob", "2024-01-01", "hung a piece"),
+              _achievement_mistake("https://x/b1", "bob", "2024-01-01", "hung a piece")],
+             depth=14)
+    bob_id = conn.execute(
+        "SELECT id FROM mistakes WHERE username = 'bob' ORDER BY id LIMIT 1").fetchone()["id"]
+    conn.close()
+
+    client = TestClient(create_app(db_path))
+    attempt = client.post(f"/api/practice/{bob_id}/attempt",
+                          json={"from": "e2", "to": "e4", "practicingUser": "alice",
+                                "hintUsed": False})
+    assert attempt.json()["verdict"] == "best"
+
+    page = client.get("/achievements", params={"users": "alice"})
+    assert page.status_code == 200
+    assert "hung a piece" in page.text
+    assert "1/2" in page.text  # 1 of bob's 2 mistakes in this category solved by alice

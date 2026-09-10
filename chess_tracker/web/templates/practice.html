@@ -283,7 +283,7 @@ async function submitAttempt(from, to, promotion) {
   const r = await fetch("/api/practice/" + MISTAKE_ID + "/attempt", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ from, to, promotion }),
+    body: JSON.stringify({ from, to, promotion, practicingUser: DATA.practicingUser, hintUsed }),
   });
   const result = await r.json();
 

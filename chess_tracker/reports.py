@@ -277,6 +277,104 @@ def practice_pool(conn: sqlite3.Connection, category: str, exclude_user: str | N
         [*params, *SERIOUS, PRACTICE_QUEUE_LIMIT]).fetchall()
 
 
+def practice_stats(conn: sqlite3.Connection, user: str, time_class: str | None = None,
+                   phase: str | None = None) -> dict:
+    """
+    Everything the Achievements page shows about practice-mode usage for one
+    player. Unlike report_model(), always returns a real dict, never None --
+    a player can have analysed games (report_model() succeeds) but zero
+    practice attempts yet, which is a milder, separate empty state.
+
+    `overall["total"]` is the sum of by_category's own_total across every
+    category -- the same unclipped counts straight off `mistakes`, not
+    practice_queue()'s PRACTICE_QUEUE_LIMIT-capped queue size (that queue is
+    an ordering/display concern for practice mode's "worst first" pass, not
+    a meaningful denominator here -- a player with more than 100 serious
+    mistakes should still see their real total).
+    """
+    u = user.lower()
+    _, _, mistakes_where, mistakes_params = _scope(u, time_class, phase)
+    severity_in = f"AND severity IN ({','.join('?' * len(SERIOUS))})"
+
+    attempted = conn.execute(
+        "SELECT COUNT(DISTINCT mistake_id) c FROM practice_attempts WHERE practicing_user = ?",
+        [u]).fetchone()["c"]
+    solved = conn.execute(
+        "SELECT COUNT(DISTINCT mistake_id) c FROM practice_attempts "
+        "WHERE practicing_user = ? AND hint_used = 0 AND verdict IN ('best','also_fine')",
+        [u]).fetchone()["c"]
+
+    own_totals = dict(conn.execute(
+        f"SELECT category, COUNT(*) c FROM mistakes {mistakes_where} {severity_in} "
+        f"GROUP BY category", [*mistakes_params, *SERIOUS]).fetchall())
+    total = sum(own_totals.values())
+
+    others_where = "WHERE username != ?"
+    others_params: list = [u]
+    if time_class:
+        others_where += " AND time_class = ?"
+        others_params.append(time_class)
+    if phase:
+        others_where += " AND phase = ?"
+        others_params.append(phase)
+    # Deliberately NOT practice_pool(): that's capped at PRACTICE_QUEUE_LIMIT
+    # per category (built for the practice-mode queue, not a denominator),
+    # which would silently undercount any category with more than 100
+    # other-player mistakes.
+    others_totals = dict(conn.execute(
+        f"SELECT category, COUNT(*) c FROM mistakes {others_where} {severity_in} "
+        f"GROUP BY category", [*others_params, *SERIOUS]).fetchall())
+
+    own_solved = dict(conn.execute(
+        "SELECT category, COUNT(DISTINCT mistake_id) c FROM practice_attempts "
+        "WHERE practicing_user = ? AND owner = ? AND hint_used = 0 "
+        "AND verdict IN ('best','also_fine') GROUP BY category",
+        [u, u]).fetchall())
+    others_solved = dict(conn.execute(
+        "SELECT category, COUNT(DISTINCT mistake_id) c FROM practice_attempts "
+        "WHERE practicing_user = ? AND owner != ? AND hint_used = 0 "
+        "AND verdict IN ('best','also_fine') GROUP BY category",
+        [u, u]).fetchall())
+
+    def rate(solved_n: int, total_n: int) -> float | None:
+        return solved_n / total_n if total_n else None
+
+    by_category = []
+    for cat in sorted(set(own_totals) | set(others_totals)):
+        own_total = own_totals.get(cat, 0)
+        oth_total = others_totals.get(cat, 0)
+        own_s = own_solved.get(cat, 0)
+        oth_s = others_solved.get(cat, 0)
+        by_category.append({
+            "category": cat, "own_total": own_total, "own_solved": own_s,
+            "own_rate": rate(own_s, own_total),
+            "others_total": oth_total, "others_solved": oth_s,
+            "others_rate": rate(oth_s, oth_total),
+        })
+
+    hint_row = conn.execute(
+        "SELECT SUM(hint_used) hinted, COUNT(*) total FROM practice_attempts "
+        "WHERE practicing_user = ? AND verdict IN ('best','also_fine')", [u]).fetchone()
+    hint_sample = hint_row["total"] or 0
+    hint_rate = hint_row["hinted"] / hint_sample if hint_sample else None
+
+    recent_rows = conn.execute(
+        "SELECT * FROM practice_attempts WHERE practicing_user = ? "
+        "ORDER BY created_at DESC, id DESC LIMIT 20", [u]).fetchall()
+    recent = [{
+        "id": r["id"], "created_at": r["created_at"], "category": r["category"],
+        "owner": r["owner"], "is_own": r["owner"] == u, "verdict": r["verdict"],
+        "hint_used": bool(r["hint_used"]),
+    } for r in recent_rows]
+
+    return {
+        "overall": {"total": total, "attempted": attempted, "solved": solved},
+        "by_category": by_category,
+        "hint_rate": hint_rate, "hint_sample": hint_sample,
+        "recent": recent,
+    }
+
+
 def report_model(conn: sqlite3.Connection, user: str, time_class: str | None = None,
                   last_days: int | None = None, phase: str | None = None) -> dict | None:
     """
