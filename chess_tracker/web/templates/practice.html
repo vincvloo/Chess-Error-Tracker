@@ -5,9 +5,9 @@
 .practicehead { display: flex; justify-content: space-between; align-items: baseline;
   flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .practicehead .muted { font-size: 12.5px; }
-.board { display: grid; grid-template-columns: repeat(8, 1fr); width: 100%; max-width: 420px;
-  aspect-ratio: 1; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
-  margin: 0 auto; }
+.board { display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
+  width: 100%; max-width: 420px; aspect-ratio: 1; border: 1px solid var(--border);
+  border-radius: 6px; overflow: hidden; margin: 0 auto; }
 .sq { display: flex; align-items: center; justify-content: center; font-size: min(6vw, 34px);
   cursor: pointer; user-select: none; position: relative; }
 .sq.light { background: #EDE6D9; }
@@ -47,6 +47,7 @@
 
 {% elif pickCategory %}
 <div class="panel">
+  <a class="navlink" href="/">&larr; Home</a>
   <h2>{{ username }} &mdash; what do you want to work on?</h2>
   {% if categories %}
   <table>
@@ -70,7 +71,9 @@
 <div class="panel">
   <div class="practicehead">
     <div>
-      <h2 style="margin:0">{{ username }} &mdash; position {{ data.queuePosition }} of {{ data.queueTotal }}</h2>
+      <a class="navlink" href="/">&larr; Home</a> &middot;
+      <a class="navlink" href="/practice?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}">Change category</a>
+      <h2 style="margin:6px 0 0">{{ username }} &mdash; position {{ data.queuePosition }} of {{ data.queueTotal }}</h2>
       <div class="muted">move {{ data.moveNumber }}, {{ data.phase }}, {{ data.colour }} to move
         &middot; -{{ data.cpLoss }}cp &middot; {{ data.category }}
         {% if data.owner != username %} &middot; <span class="ownertag">@{{ data.owner }}</span>{% endif %}</div>
