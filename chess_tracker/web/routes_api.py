@@ -63,6 +63,32 @@ def cancel_job(request: Request, job_id: str):
     return {"cancelled": True}
 
 
+@router.get("/practice/{mistake_id}/hint")
+def practice_hint(request: Request, mistake_id: int):
+    """
+    A partial hint: which square holds the piece that should move, and what
+    kind of piece it is -- not the destination square, not the SAN, so it
+    nudges without giving the move away. Still computed entirely
+    server-side; /practice's initial page load never has `best` at all.
+    """
+    conn = open_db(request.app.state.db_path)
+    try:
+        row = conn.execute("SELECT fen, best FROM mistakes WHERE id = ?",
+                           (mistake_id,)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return JSONResponse({"error": "no such mistake"}, status_code=404)
+
+    board = chess.Board(row["fen"])
+    move = board.parse_san(row["best"])
+    piece = board.piece_at(move.from_square)
+    return {
+        "square": chess.square_name(move.from_square),
+        "piece": chess.piece_name(piece.piece_type) if piece else None,
+    }
+
+
 @router.post("/practice/{mistake_id}/attempt")
 async def practice_attempt(request: Request, mistake_id: int):
     """

@@ -51,33 +51,9 @@
       Achievements<span class="sub">how you've improved</span></a>
     <a class="actioncard" href="/dashboard?users={{ primary_user }}">
       Dashboard<span class="sub">full stats &amp; filters</span></a>
+    <a class="actioncard actioncard-wide" href="/analyse-more">
+      Analyse more players<span class="sub">fetch a friend or rival's games too</span></a>
   </div>
-</div>
-
-<div class="panel">
-  <h2>Analyse more players</h2>
-  <p class="muted">Fetch someone else's games too — a friend, a rival, anyone on Chess.com.
-    Other settings (email, engine depth, etc.) are shared from the <a class="navlink" href="/settings">parameters page</a>.</p>
-  <form method="post" action="/jobs">
-    <input type="hidden" name="email" value="{{ settings.email }}">
-    <input type="hidden" name="depth" value="{{ settings.depth }}">
-    <input type="hidden" name="threads" value="{{ settings.threads }}">
-    <input type="hidden" name="pause" value="{{ settings.pause }}">
-    <input type="hidden" name="min_loss" value="{{ settings.min_loss }}">
-    <label>Chess.com username</label>
-    <input type="text" name="user" required placeholder="rival1">
-    <div class="row">
-      <div>
-        <label>Since (YYYY-MM, optional)</label>
-        <input type="text" name="since" placeholder="2026-01">
-      </div>
-      <div>
-        <label>Limit new games (optional)</label>
-        <input type="number" name="limit" placeholder="how many games to fetch">
-      </div>
-    </div>
-    <button type="submit">Fetch &amp; analyse</button>
-  </form>
 </div>
 
 {% if others %}

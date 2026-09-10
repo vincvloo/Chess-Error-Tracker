@@ -14,11 +14,8 @@ from .reports import (
     DELTA_EPSILON,
     ECO_MIN_GAMES,
     ECO_TOP_N,
-    MOVE_BUCKET_LABELS,
-    MOVE_BUCKET_SQL_CASE,
     SERIOUS,
     TIME_PRESSURE_ALERT,
-    TOP_POSITIONS,
 )
 
 TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -92,7 +89,6 @@ def build_dashboard_data(conn: sqlite3.Connection, users: list[str]) -> dict:
                 "users": [], "timeClasses": [], "phases": phases,
                 "severities": list(SEVERITIES), "categories": [],
                 "colours": list(COLOURS), "ecos": [], "months": [],
-                "moveBuckets": list(MOVE_BUCKET_LABELS),
                 "clockBuckets": list(CLOCK_BUCKET_LABELS),
             },
             "movesFacts": _fact_table(["user", "tc", "phase", "month"], ["moves"], []),
@@ -100,9 +96,6 @@ def build_dashboard_data(conn: sqlite3.Connection, users: list[str]) -> dict:
                                       ["games", "movesPlayed", "unbackfilled"], []),
             "countFacts": _fact_table(
                 ["user", "tc", "phase", "severity", "category", "month"], ["n"], []),
-            "moveBucketFacts": _fact_table(
-                ["user", "tc", "phase", "severity", "category", "month", "moveBucket"],
-                ["n"], []),
             "clockBucketFacts": _fact_table(
                 ["user", "tc", "phase", "severity", "category", "month", "clockBucket"],
                 ["n"], []),
@@ -110,14 +103,12 @@ def build_dashboard_data(conn: sqlite3.Connection, users: list[str]) -> dict:
                                             ["moves"], []),
             "colourCountFacts": _fact_table(
                 ["user", "tc", "colour", "phase", "severity", "category"], ["n"], []),
-            "ecoGamesFacts": _fact_table(["user", "tc", "eco"], ["games"], []),
+            "ecoGamesFacts": _fact_table(["user", "tc", "eco", "colour"], ["games"], []),
             "ecoErrorFacts": _fact_table(
-                ["user", "tc", "phase", "severity", "category", "eco"], ["n"], []),
-            "topFacts": _fact_table(["user", "tc", "phase", "severity", "category"],
-                                    ["row"], []),
+                ["user", "tc", "phase", "severity", "category", "eco", "colour"], ["n"], []),
             "meta": {
                 "ecoMinGames": ECO_MIN_GAMES, "ecoTopN": ECO_TOP_N,
-                "topPositions": TOP_POSITIONS, "timePressureAlert": TIME_PRESSURE_ALERT,
+                "timePressureAlert": TIME_PRESSURE_ALERT,
                 "deltaEpsilon": DELTA_EPSILON, "thinGamesThreshold": THIN_GAMES_THRESHOLD,
                 "defaultSeverities": list(SERIOUS),
                 "ratingEndpoints": {}, "dateEndpoints": {},
@@ -164,21 +155,7 @@ def build_dashboard_data(conn: sqlite3.Connection, users: list[str]) -> dict:
                   sev_ix[r["severity"]], cat_ix[r["category"]], mo_ix[r["month"]], r["n"]]
                  for r in count_rows]
 
-    # ---- moveBucketFacts / clockBucketFacts --------------------------------
-    move_bucket_ix = _index_map(MOVE_BUCKET_LABELS)
-    move_bucket_rows = conn.execute(f"""
-        SELECT username, time_class, phase, severity, category, substr(date,1,7) AS month,
-               {MOVE_BUCKET_SQL_CASE} AS bucket, COUNT(*) AS n
-        FROM mistakes
-        WHERE username IN ({placeholders}) AND time_class IS NOT NULL
-              AND phase IS NOT NULL AND date IS NOT NULL
-        GROUP BY username, time_class, phase, severity, category, month, bucket
-    """, users).fetchall()
-    move_bucket_data = [[u_ix[r["username"]], tc_ix[r["time_class"]], ph_ix[r["phase"]],
-                        sev_ix[r["severity"]], cat_ix[r["category"]], mo_ix[r["month"]],
-                        move_bucket_ix[r["bucket"]], r["n"]]
-                       for r in move_bucket_rows]
-
+    # ---- clockBucketFacts ---------------------------------------------------
     clock_bucket_ix = _index_map(CLOCK_BUCKET_LABELS)
     clock_bucket_rows = conn.execute(f"""
         SELECT username, time_class, phase, severity, category, substr(date,1,7) AS month,
@@ -196,7 +173,7 @@ def build_dashboard_data(conn: sqlite3.Connection, users: list[str]) -> dict:
     # ---- colourMovesFacts / colourCountFacts -------------------------------
     # colour is a breakdown dimension of one panel, not a filter, so it does
     # not belong on the tables above (measured: adding it there nearly
-    # doubles countFacts/topFacts for no benefit).
+    # doubles countFacts for no benefit).
     colour_moves_rows = conn.execute(f"""
         SELECT username, time_class, my_colour AS colour,
                COALESCE(SUM(opening_moves),0)    AS opening,
@@ -232,16 +209,19 @@ def build_dashboard_data(conn: sqlite3.Connection, users: list[str]) -> dict:
     # The >=3-games rule can only be applied per user across all time
     # classes (an eco with 2 bullet + 2 blitz games has 4 once both are
     # ticked), so it and the top-8 cut are applied client-side; the server
-    # just emits raw per (user, tc, eco) counts.
+    # just emits raw per (user, tc, eco, colour) counts. colour is included
+    # here (unlike the other tables) because an ECO code alone doesn't say
+    # which side it was played from, and that's the whole point of this
+    # panel -- e.g. C00 as White is a different opening than C00 as Black.
     eco_games_rows = conn.execute(f"""
-        SELECT username, time_class, eco, COUNT(*) AS games
+        SELECT username, time_class, eco, my_colour AS colour, COUNT(*) AS games
         FROM games
         WHERE username IN ({placeholders}) AND time_class IS NOT NULL
-              AND eco IS NOT NULL AND eco != '?'
-        GROUP BY username, time_class, eco
+              AND eco IS NOT NULL AND eco != '?' AND my_colour IS NOT NULL
+        GROUP BY username, time_class, eco, my_colour
     """, users).fetchall()
     eco_games_data = [[u_ix[r["username"]], tc_ix[r["time_class"]], eco_ix[r["eco"]],
-                      r["games"]]
+                      col_ix[r["colour"]], r["games"]]
                      for r in eco_games_rows]
 
     # ECO respects the category filter, unlike the terminal report's ECO
@@ -250,46 +230,18 @@ def build_dashboard_data(conn: sqlite3.Connection, users: list[str]) -> dict:
     # reproducing the terminal report's existing asymmetry, not fixing it.
     eco_error_rows = conn.execute(f"""
         SELECT m.username, m.time_class, m.phase, m.severity, m.category, g.eco,
-               COUNT(*) AS n
+               m.my_colour AS colour, COUNT(*) AS n
         FROM mistakes m JOIN games g ON g.url = m.game_url AND g.username = m.username
         WHERE m.username IN ({placeholders}) AND m.time_class IS NOT NULL
               AND m.phase IS NOT NULL AND g.eco IS NOT NULL AND g.eco != '?'
-        GROUP BY m.username, m.time_class, m.phase, m.severity, m.category, g.eco
+              AND m.my_colour IS NOT NULL
+        GROUP BY m.username, m.time_class, m.phase, m.severity, m.category, g.eco,
+                 m.my_colour
     """, users).fetchall()
     eco_error_data = [[u_ix[r["username"]], tc_ix[r["time_class"]], ph_ix[r["phase"]],
                       sev_ix[r["severity"]], cat_ix[r["category"]], eco_ix[r["eco"]],
-                      r["n"]]
+                      col_ix[r["colour"]], r["n"]]
                      for r in eco_error_rows]
-
-    # ---- topFacts: top TOP_POSITIONS rows per (user, tc, phase, severity, --
-    # category) bucket. Buckets are disjoint and the sort key is a total
-    # order (cp_loss desc, end_time desc, id as a stable tiebreak), so the
-    # union of any selected buckets' top rows, re-sorted, is exactly the top
-    # TOP_POSITIONS of that union -- see the phase 2 plan on why this needs a
-    # total order to be exact.
-    top_rows_cursor = conn.execute(f"""
-        SELECT * FROM mistakes
-        WHERE username IN ({placeholders}) AND time_class IS NOT NULL AND phase IS NOT NULL
-        ORDER BY username, time_class, phase, severity, category,
-                 cp_loss DESC, end_time DESC, id DESC
-    """, users)
-    top_data = []
-    bucket_key = None
-    bucket_count = 0
-    for r in top_rows_cursor:
-        key = (r["username"], r["time_class"], r["phase"], r["severity"], r["category"])
-        if key != bucket_key:
-            bucket_key = key
-            bucket_count = 0
-        bucket_count += 1
-        if bucket_count > TOP_POSITIONS:
-            continue
-        top_data.append([
-            u_ix[r["username"]], tc_ix[r["time_class"]], ph_ix[r["phase"]],
-            sev_ix[r["severity"]], cat_ix[r["category"]],
-            r["cp_loss"], r["end_time"], r["id"], r["date"], r["move_number"],
-            r["played"], r["best"], r["clock_seconds"], r["game_url"],
-        ])
 
     # ---- meta: thresholds shared with reports.py, plus rating/date range --
     rating_rows = conn.execute(f"""
@@ -326,7 +278,6 @@ def build_dashboard_data(conn: sqlite3.Connection, users: list[str]) -> dict:
             "users": present, "timeClasses": time_classes, "phases": phases,
             "severities": list(SEVERITIES), "categories": categories,
             "colours": list(COLOURS), "ecos": ecos, "months": months,
-            "moveBuckets": list(MOVE_BUCKET_LABELS),
             "clockBuckets": list(CLOCK_BUCKET_LABELS),
         },
         "movesFacts": _fact_table(["user", "tc", "phase", "month"], ["moves"], moves_data),
@@ -334,9 +285,6 @@ def build_dashboard_data(conn: sqlite3.Connection, users: list[str]) -> dict:
                                   ["games", "movesPlayed", "unbackfilled"], games_data),
         "countFacts": _fact_table(
             ["user", "tc", "phase", "severity", "category", "month"], ["n"], count_data),
-        "moveBucketFacts": _fact_table(
-            ["user", "tc", "phase", "severity", "category", "month", "moveBucket"],
-            ["n"], move_bucket_data),
         "clockBucketFacts": _fact_table(
             ["user", "tc", "phase", "severity", "category", "month", "clockBucket"],
             ["n"], clock_bucket_data),
@@ -345,14 +293,13 @@ def build_dashboard_data(conn: sqlite3.Connection, users: list[str]) -> dict:
         "colourCountFacts": _fact_table(
             ["user", "tc", "colour", "phase", "severity", "category"], ["n"],
             colour_count_data),
-        "ecoGamesFacts": _fact_table(["user", "tc", "eco"], ["games"], eco_games_data),
+        "ecoGamesFacts": _fact_table(["user", "tc", "eco", "colour"], ["games"], eco_games_data),
         "ecoErrorFacts": _fact_table(
-            ["user", "tc", "phase", "severity", "category", "eco"], ["n"], eco_error_data),
-        "topFacts": _fact_table(["user", "tc", "phase", "severity", "category"],
-                                ["row"], top_data),
+            ["user", "tc", "phase", "severity", "category", "eco", "colour"], ["n"],
+            eco_error_data),
         "meta": {
             "ecoMinGames": ECO_MIN_GAMES, "ecoTopN": ECO_TOP_N,
-            "topPositions": TOP_POSITIONS, "timePressureAlert": TIME_PRESSURE_ALERT,
+            "timePressureAlert": TIME_PRESSURE_ALERT,
             "deltaEpsilon": DELTA_EPSILON, "thinGamesThreshold": THIN_GAMES_THRESHOLD,
             "defaultSeverities": list(SERIOUS),
             "ratingEndpoints": rating_endpoints, "dateEndpoints": date_endpoints,

@@ -2,10 +2,6 @@
 Parity harness: the fact tables build_dashboard_data() emits must aggregate
 to the exact same numbers as reports.report_model(), which is independently
 tested (golden test, real-database diff) and treated here as the oracle.
-
-Also covers the topFacts "top-10 of the union is exact" property from the
-phase 2 plan: buckets are disjoint and sorted by a total order, so unioning
-any selected buckets' top rows and re-sorting must equal the true top 10.
 """
 from collections import Counter, defaultdict
 
@@ -145,6 +141,14 @@ def test_moves_and_counts_match_report_model_per_user_tc_phase():
                 })
                 assert moves == model["total_moves"], (user, tc, phase, "moves")
 
+                # gamesFacts has no phase dim (matches report_model()'s own
+                # games count, which is also not phase-scoped) -- this is
+                # the "per 100 games" denominator the by-phase panel uses.
+                games = _sum_measure(data["gamesFacts"], {
+                    "user": {u_ix[user]}, "tc": {tc_ix[tc]},
+                })
+                assert games == model["games"], (user, tc, phase, "games")
+
                 n_serious = _sum_measure(data["countFacts"], {
                     "user": {u_ix[user]}, "tc": {tc_ix[tc]}, "phase": {ph_ix[phase]},
                     "severity": serious_idx,
@@ -161,19 +165,6 @@ def test_moves_and_counts_match_report_model_per_user_tc_phase():
                     cat = lists["categories"][row[4]]
                     by_cat[cat] += row[-1]
                 assert dict(by_cat) == dict(model["recurring"]), (user, tc, phase, "recurring")
-
-                # by move number bucket
-                move_bucket_ix = {b: i for i, b in enumerate(lists["moveBuckets"])}
-                by_bucket = defaultdict(int)
-                for row in _rows_matching(data["moveBucketFacts"], {
-                    "user": {u_ix[user]}, "tc": {tc_ix[tc]}, "phase": {ph_ix[phase]},
-                    "severity": serious_idx,
-                }):
-                    by_bucket[lists["moveBuckets"][row[6]]] += row[-1]
-                expected_by_move = dict(model["by_move"])
-                for bucket_label, n in expected_by_move.items():
-                    assert by_bucket.get(bucket_label, 0) == n, \
-                        (user, tc, phase, "move_bucket", bucket_label)
 
                 # time pressure
                 if model["time_pressure"] is not None:
@@ -245,72 +236,6 @@ def test_openings_match_report_model():
                     })
                     assert games == expected_n, (user, tc, phase, eco, "games")
                     assert errors == expected_e, (user, tc, phase, eco, "errors")
-
-
-def _merged_top(data, lists, user, tc, phase, categories, severities, limit):
-    """What the JS will do: union every selected bucket's stored top rows,
-    then re-sort by the same total order and take the global top `limit`."""
-    u_ix = {u: i for i, u in enumerate(lists["users"])}
-    tc_ix = {t: i for i, t in enumerate(lists["timeClasses"])}
-    ph_ix = {p: i for i, p in enumerate(lists["phases"])}
-    sev_ix = {s: i for i, s in enumerate(lists["severities"])}
-    cat_ix = {c: i for i, c in enumerate(lists["categories"])}
-
-    rows = []
-    for row in data["topFacts"]["data"]:
-        u, t, p, s, c = row[:5]
-        if (u == u_ix[user] and t == tc_ix[tc] and p == ph_ix[phase]
-                and s in {sev_ix[x] for x in severities}
-                and c in {cat_ix[x] for x in categories}):
-            rows.append(row)
-    rows.sort(key=lambda r: (-r[5], -r[6], -r[7]))
-    return rows[:limit]
-
-
-def test_positions_top_10_of_the_union_is_exact():
-    """
-    The property from the phase 2 plan: storing each disjoint bucket's own
-    top 10 (sorted by the same total order) means the union of any selected
-    buckets' top rows, re-sorted, equals the true top 10 of that union --
-    without needing to store more than 10 rows per bucket.
-    """
-    conn = _seeded_db()
-    data = build_dashboard_data(conn, ["alice", "bob"])
-    lists = data["lists"]
-
-    for user in lists["users"]:
-        for tc in lists["timeClasses"]:
-            for phase in lists["phases"]:
-                model = report_model(conn, user, time_class=tc, phase=phase)
-                if model is None or not model["positions"]:
-                    continue
-                merged = _merged_top(data, lists, user, tc, phase,
-                                     lists["categories"], SERIOUS, len(model["positions"]))
-                got = [(r[5], r[6], r[7]) for r in merged]
-                expected = [(p["cp_loss"], p["end_time"], p["id"]) for p in model["positions"]]
-                assert got == expected, (user, tc, phase)
-
-
-def test_positions_top_10_exactness_with_deliberate_ties():
-    """Same property, but forced through a bucket with more than 10 rows
-    tied at the cp_loss cap, some of which also tie on end_time."""
-    conn = open_db(":memory:")
-    save_game(conn, _game("https://x/g1", "alice", 1000, "2024-01-01", "blitz", "white",
-                          1500, "C00", 100, 100, 0, 0), [
-        _mistake("https://x/g1", "alice", "2024-01-01", 1000 + i, "blitz", "white", 1500,
-                 i + 1, "opening", "blunder", 2000, "hung a piece", "e4", "d4", None)
-        for i in range(15)
-    ], depth=14)
-    data = build_dashboard_data(conn, ["alice"])
-    lists = data["lists"]
-    model = report_model(conn, "alice", time_class="blitz", phase="opening")
-
-    merged = _merged_top(data, lists, "alice", "blitz", "opening",
-                         lists["categories"], SERIOUS, 10)
-    got = [(r[5], r[6], r[7]) for r in merged]
-    expected = [(p["cp_loss"], p["end_time"], p["id"]) for p in model["positions"]]
-    assert got == expected
-    assert len(got) == 10
 
 
 def test_severity_filter_changes_counts_as_expected():
