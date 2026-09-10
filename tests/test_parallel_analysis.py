@@ -198,9 +198,11 @@ def test_analyse_shard_reports_progress_via_the_queue(mock_popen, tmp_path):
         _analyse_shard(db_path, "alice", games, "/fake/stockfish", 14, 2,
                        INACCURACY, q, 3, multiprocessing.Event())
 
-    seen = []
-    while not q.empty():
-        seen.append(q.get())
+    # Queue.put() hands off to a background feeder thread -- q.empty() can
+    # transiently (and wrongly) report True right after put() returns, before
+    # that thread has actually pushed the item into the pipe. q.get(timeout=)
+    # blocks until the item genuinely arrives instead of racing with it.
+    seen = [q.get(timeout=2) for _ in range(2)]
     assert seen == [(3, 1, 2), (3, 2, 2)]
 
 
