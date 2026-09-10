@@ -8,6 +8,61 @@ from collections import Counter, defaultdict
 
 from .analysis import PHASES
 
+# Error categories counted as "serious" everywhere in the report and (from
+# phase 2 on) the dashboard's default severity filter, so the two agree by
+# default instead of by coincidence.
+SERIOUS = ("mistake", "blunder")
+
+# Upper bound (inclusive) of each move-number bucket except the last, which
+# is open-ended. Kept as a plain edges+labels pair, with the SQL CASE built
+# from the same numbers below, so the Python bucketing used by the terminal
+# report and any SQL bucketing used by the dashboard can never drift apart.
+MOVE_BUCKET_EDGES = (10, 20, 30, 40)
+MOVE_BUCKET_LABELS = ("1-10", "11-20", "21-30", "31-40", "41+")
+
+# Upper bound (exclusive) of each clock-seconds bucket except the last.
+CLOCK_BUCKET_EDGES = (30, 60)
+CLOCK_BUCKET_LABELS = ("under 30s left", "30 to 60s left", "over 60s left")
+
+ECO_MIN_GAMES = 3
+ECO_TOP_N = 8
+TOP_POSITIONS = 10
+TIME_PRESSURE_ALERT = 0.30  # fraction of clocked errors under the first bucket
+TREND_MIN_MONTHS = 2
+DELTA_EPSILON = 0.05  # per-100-moves change below this counts as "flat"
+
+
+def _bucket_sql_case(column: str, edges: tuple[int, ...], labels: tuple[str, ...],
+                      op: str) -> str:
+    whens = " ".join(f"WHEN {column} {op} {edge} THEN '{label}'"
+                      for edge, label in zip(edges, labels))
+    return f"CASE {whens} ELSE '{labels[-1]}' END"
+
+
+MOVE_BUCKET_SQL_CASE = _bucket_sql_case("move_number", MOVE_BUCKET_EDGES,
+                                        MOVE_BUCKET_LABELS, "<=")
+CLOCK_BUCKET_SQL_CASE = _bucket_sql_case("clock_seconds", CLOCK_BUCKET_EDGES,
+                                         CLOCK_BUCKET_LABELS, "<")
+
+
+def move_bucket(move_number: int) -> str:
+    """Which move-number bucket a mistake falls in. Pinned against
+    MOVE_BUCKET_SQL_CASE by an exhaustive test -- see test_reports.py."""
+    for edge, label in zip(MOVE_BUCKET_EDGES, MOVE_BUCKET_LABELS):
+        if move_number <= edge:
+            return label
+    return MOVE_BUCKET_LABELS[-1]
+
+
+def clock_bucket(clock_seconds: float) -> str:
+    """Which clock-pressure bucket a mistake falls in. Callers must exclude
+    NULL clocks themselves (there is no bucket for "unknown"), matching how
+    the time-pressure section is scoped to clocked mistakes only."""
+    for edge, label in zip(CLOCK_BUCKET_EDGES, CLOCK_BUCKET_LABELS):
+        if clock_seconds < edge:
+            return label
+    return CLOCK_BUCKET_LABELS[-1]
+
 
 def _scope(user: str, time_class: str | None = None, phase: str | None = None,
            last_days: int | None = None) -> tuple[str, list, str, list]:
@@ -172,8 +227,22 @@ def bar(n: int, total: int, width: int = 28) -> str:
     return "#" * filled + "." * (width - filled)
 
 
-def report(conn: sqlite3.Connection, user: str, time_class: str | None = None,
-           last_days: int | None = None, phase: str | None = None) -> str:
+def report_model(conn: sqlite3.Connection, user: str, time_class: str | None = None,
+                  last_days: int | None = None, phase: str | None = None) -> dict | None:
+    """
+    All the numbers behind the terminal report, with no text formatting.
+    report() is a thin formatter over this. Returns None if there are no
+    stored games for this filter.
+
+    Two deliberate behaviour changes live here rather than in report():
+    - "positions" breaks cp_loss ties by most recent, then by a stable id,
+      and carries how often each row's category occurs in this selection
+      (thousands of mistakes tie at the cp_loss cap -- see analysis.py -- so
+      "worst first" alone was surfacing arbitrary, possibly very old rows).
+    - the first-half/second-half deltas are sorted deterministically
+      (previously iterated a Python set, so tied deltas could reorder
+      between runs on identical data).
+    """
     u = user.lower()
     games_where, games_params, mistakes_where, mistakes_params = _scope(
         u, time_class, phase, last_days)
@@ -181,16 +250,12 @@ def report(conn: sqlite3.Connection, user: str, time_class: str | None = None,
     games = conn.execute(f"SELECT * FROM games {games_where} ORDER BY end_time",
                          games_params).fetchall()
     if not games:
-        return "No games stored yet for that filter."
+        return None
 
     serious = conn.execute(
-        f"SELECT * FROM mistakes {mistakes_where} AND severity IN ('mistake','blunder')",
-        mistakes_params).fetchall()
-
-    out: list[str] = []
-
-    def line(s: str = "") -> None:
-        out.append(s)
+        f"SELECT * FROM mistakes {mistakes_where} "
+        f"AND severity IN ({','.join('?' * len(SERIOUS))})",
+        [*mistakes_params, *SERIOUS]).fetchall()
 
     moves_col = f"{phase}_moves" if phase else "moves_played"
     total_moves = sum(g[moves_col] or 0 for g in games)
@@ -198,70 +263,26 @@ def report(conn: sqlite3.Connection, user: str, time_class: str | None = None,
     ratings = [g["my_rating"] for g in games if g["my_rating"]]
     n_serious = len(serious)
     moves_label = f"your {phase} moves" if phase else "your moves"
+    cat_counts = Counter(m["category"] for m in serious)
 
-    filters = ", ".join(filter(None, [time_class, phase]))
-    line("=" * 64)
-    line(f"CHESS ERROR PROFILE  |  {user}" + (f"  [{filters}]" if filters else ""))
-    line("=" * 64)
-    line(f"Games in store     : {len(games)}")
-    line(f"Your moves         : {total_moves}" + (f"  ({phase})" if phase else ""))
-    line(f"Date range         : {games[0]['date']} to {games[-1]['date']}")
-    if ratings:
-        line(f"Rating             : {ratings[0]} then, {ratings[-1]} now "
-             f"({ratings[-1] - ratings[0]:+d})")
-    line(f"Mistakes + blunders: {n_serious}  "
-         f"({n_serious / max(total_moves, 1) * 100:.1f}% of {moves_label})")
-    if not_backfilled:
-        line(f"NOTE: {not_backfilled} game(s) have no per-phase move counts yet "
-             f"(re-run without --report-only to backfill) -- they are excluded above.")
-    line()
-
-    line("-" * 64)
-    line("RECURRING ERROR TYPES")
-    line("-" * 64)
-    for cat, n in Counter(m["category"] for m in serious).most_common():
-        line(f"{n:5d}  {n / max(n_serious,1) * 100:5.1f}%  {bar(n, n_serious)}  {cat}")
-    line()
-
+    by_phase = None
     if not phase:
-        line("-" * 64)
-        line("WHEN THEY HAPPEN")
-        line("-" * 64)
-        phases = Counter(m["phase"] for m in serious)
-        for ph in PHASES:
-            n = phases.get(ph, 0)
-            line(f"{n:5d}  {n / max(n_serious,1) * 100:5.1f}%  {bar(n, n_serious)}  {ph}")
-        line()
+        phase_counts = Counter(m["phase"] for m in serious)
+        by_phase = [(ph, phase_counts.get(ph, 0)) for ph in PHASES]
 
-    buckets = ["1-10", "11-20", "21-30", "31-40", "41+"]
-
-    def bucket(mv: int) -> str:
-        return (buckets[0] if mv <= 10 else buckets[1] if mv <= 20
-                else buckets[2] if mv <= 30 else buckets[3] if mv <= 40 else buckets[4])
-
-    by_move = Counter(bucket(m["move_number"]) for m in serious)
-    line("By move number:")
-    for b in buckets:
-        n = by_move.get(b, 0)
-        line(f"{n:5d}  {n / max(n_serious,1) * 100:5.1f}%  {bar(n, n_serious)}  moves {b}")
-    line()
+    move_counts = Counter(move_bucket(m["move_number"]) for m in serious)
+    by_move = [(b, move_counts.get(b, 0)) for b in MOVE_BUCKET_LABELS]
 
     clocked = [m for m in serious if m["clock_seconds"] is not None]
+    time_pressure = None
     if clocked:
-        line("-" * 64)
-        line("TIME PRESSURE")
-        line("-" * 64)
-        groups = (("under 30s left", [m for m in clocked if m["clock_seconds"] < 30]),
-                  ("30 to 60s left", [m for m in clocked if 30 <= m["clock_seconds"] < 60]),
-                  ("over 60s left", [m for m in clocked if m["clock_seconds"] >= 60]))
-        for label, grp in groups:
-            n = len(grp)
-            line(f"{n:5d}  {n / len(clocked) * 100:5.1f}%  {bar(n, len(clocked))}  {label}")
-        if len(groups[0][1]) / len(clocked) > 0.30:
-            line()
-            line(">> Most of your damage happens on a low clock. That is a time")
-            line("   management problem, not a chess knowledge problem.")
-        line()
+        clock_counts = Counter(clock_bucket(m["clock_seconds"]) for m in clocked)
+        groups = [(label, clock_counts.get(label, 0)) for label in CLOCK_BUCKET_LABELS]
+        time_pressure = {
+            "clocked_total": len(clocked),
+            "groups": groups,
+            "alert": groups[0][1] / len(clocked) > TIME_PRESSURE_ALERT,
+        }
 
     # ---- the whole point of persisting: movement over time -----------------
     monthly: dict[str, list[int]] = defaultdict(lambda: [0, 0])
@@ -270,20 +291,10 @@ def report(conn: sqlite3.Connection, user: str, time_class: str | None = None,
     for m in serious:
         monthly[m["date"][:7]][0] += 1
 
-    if len(monthly) >= 2:
-        line("-" * 64)
-        line(f"TREND  (serious errors per 100 of {moves_label})")
-        line("-" * 64)
+    trend = None
+    if len(monthly) >= TREND_MIN_MONTHS:
         rows = sorted(monthly.items())
         rates = [(mo, e / mv * 100 if mv else 0.0, mv) for mo, (e, mv) in rows]
-        peak = max((r[1] for r in rates), default=0) or 1
-        for mo, rate, mv in rates:
-            line(f"  {mo}  {rate:5.1f}  {'#' * round(30 * rate / peak)}  ({mv} moves)")
-        first, last = rates[0][1], rates[-1][1]
-        line()
-        line(f"  {rates[0][0]} to {rates[-1][0]}: {first:.1f} -> {last:.1f} "
-             f"({'improving' if last < first else 'getting worse'})")
-        line()
 
         half = max(len(rows) // 2, 1)
         early_months = {mo for mo, _ in rows[:half]}
@@ -293,15 +304,150 @@ def report(conn: sqlite3.Connection, user: str, time_class: str | None = None,
         late_c: Counter = Counter()
         for m in serious:
             (early_c if m["date"][:7] in early_months else late_c)[m["category"]] += 1
+
+        halves = None
         if early_moves and late_moves:
-            line("Per 100 moves, first half of the period vs second half:")
             deltas = []
-            for c in set(early_c) | set(late_c):
+            for c in sorted(set(early_c) | set(late_c)):
                 a = early_c[c] / early_moves * 100
                 b = late_c[c] / late_moves * 100
                 deltas.append((b - a, a, b, c))
-            for d, a, b, c in sorted(deltas, key=lambda x: -abs(x[0]))[:6]:
-                arrow = "worse " if d > 0.05 else "better" if d < -0.05 else "flat  "
+            deltas.sort(key=lambda d: (-abs(d[0]), d[3]))
+            halves = deltas[:6]
+
+        trend = {"rates": rates, "halves": halves}
+
+    by_colour_and_time_class = {}
+    for key in ("my_colour", "time_class"):
+        agg: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+        for g in games:
+            agg[g[key]][1] += g[moves_col] or 0
+        for m in serious:
+            agg[m[key]][0] += 1
+        by_colour_and_time_class[key] = sorted(
+            (k, e, mv) for k, (e, mv) in agg.items() if mv)
+
+    eco: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    for g in games:
+        if g["eco"] and g["eco"] != "?":
+            eco[g["eco"]][1] += 1
+    url_to_eco = {g["url"]: g["eco"] for g in games}
+    for m in serious:
+        e = url_to_eco.get(m["game_url"])
+        if e and e != "?":
+            eco[e][0] += 1
+    frequent = {k: v for k, v in eco.items() if v[1] >= ECO_MIN_GAMES}
+    openings = sorted(((k, n, e) for k, (e, n) in frequent.items()),
+                      key=lambda row: -row[2] / row[1])[:ECO_TOP_N]
+
+    # Worst first, then most recent among ties, then a stable id.
+    top = sorted(serious,
+                key=lambda m: (-m["cp_loss"], -m["end_time"], -m["id"]))[:TOP_POSITIONS]
+    positions = [{**dict(m), "occurrences": cat_counts[m["category"]]} for m in top]
+
+    return {
+        "user": user, "time_class": time_class, "phase": phase,
+        "games": len(games), "total_moves": total_moves, "moves_label": moves_label,
+        "not_backfilled": not_backfilled or 0,
+        "date_range": (games[0]["date"], games[-1]["date"]),
+        "ratings": (ratings[0], ratings[-1]) if ratings else None,
+        "n_serious": n_serious,
+        "recurring": cat_counts.most_common(),
+        "by_phase": by_phase,
+        "by_move": by_move,
+        "time_pressure": time_pressure,
+        "trend": trend,
+        "by_colour_and_time_class": by_colour_and_time_class,
+        "openings": openings,
+        "positions": positions,
+    }
+
+
+def report(conn: sqlite3.Connection, user: str, time_class: str | None = None,
+           last_days: int | None = None, phase: str | None = None) -> str:
+    model = report_model(conn, user, time_class, last_days, phase)
+    if model is None:
+        return "No games stored yet for that filter."
+
+    phase = model["phase"]
+    moves_label = model["moves_label"]
+    n_serious = model["n_serious"]
+    out: list[str] = []
+
+    def line(s: str = "") -> None:
+        out.append(s)
+
+    filters = ", ".join(filter(None, [model["time_class"], phase]))
+    line("=" * 64)
+    line(f"CHESS ERROR PROFILE  |  {model['user']}" + (f"  [{filters}]" if filters else ""))
+    line("=" * 64)
+    line(f"Games in store     : {model['games']}")
+    line(f"Your moves         : {model['total_moves']}" + (f"  ({phase})" if phase else ""))
+    line(f"Date range         : {model['date_range'][0]} to {model['date_range'][1]}")
+    if model["ratings"]:
+        first, last = model["ratings"]
+        line(f"Rating             : {first} then, {last} now ({last - first:+d})")
+    line(f"Mistakes + blunders: {n_serious}  "
+         f"({n_serious / max(model['total_moves'], 1) * 100:.1f}% of {moves_label})")
+    if model["not_backfilled"]:
+        line(f"NOTE: {model['not_backfilled']} game(s) have no per-phase move counts yet "
+             f"(re-run without --report-only to backfill) -- they are excluded above.")
+    line()
+
+    line("-" * 64)
+    line("RECURRING ERROR TYPES")
+    line("-" * 64)
+    for cat, n in model["recurring"]:
+        line(f"{n:5d}  {n / max(n_serious,1) * 100:5.1f}%  {bar(n, n_serious)}  {cat}")
+    line()
+
+    if model["by_phase"] is not None:
+        line("-" * 64)
+        line("WHEN THEY HAPPEN")
+        line("-" * 64)
+        for ph, n in model["by_phase"]:
+            line(f"{n:5d}  {n / max(n_serious,1) * 100:5.1f}%  {bar(n, n_serious)}  {ph}")
+        line()
+
+    line("By move number:")
+    for b, n in model["by_move"]:
+        line(f"{n:5d}  {n / max(n_serious,1) * 100:5.1f}%  {bar(n, n_serious)}  moves {b}")
+    line()
+
+    tp = model["time_pressure"]
+    if tp:
+        line("-" * 64)
+        line("TIME PRESSURE")
+        line("-" * 64)
+        for label, n in tp["groups"]:
+            line(f"{n:5d}  {n / tp['clocked_total'] * 100:5.1f}%  "
+                 f"{bar(n, tp['clocked_total'])}  {label}")
+        if tp["alert"]:
+            line()
+            line(">> Most of your damage happens on a low clock. That is a time")
+            line("   management problem, not a chess knowledge problem.")
+        line()
+
+    trend = model["trend"]
+    if trend:
+        line("-" * 64)
+        line(f"TREND  (serious errors per 100 of {moves_label})")
+        line("-" * 64)
+        rates = trend["rates"]
+        peak = max((r[1] for r in rates), default=0) or 1
+        for mo, rate, mv in rates:
+            line(f"  {mo}  {rate:5.1f}  {'#' * round(30 * rate / peak)}  ({mv} moves)")
+        first, last = rates[0][1], rates[-1][1]
+        line()
+        line(f"  {rates[0][0]} to {rates[-1][0]}: {first:.1f} -> {last:.1f} "
+             f"({'improving' if last < first else 'getting worse'})")
+        line()
+
+        if trend["halves"] is not None:
+            line("Per 100 moves, first half of the period vs second half:")
+            for d, a, b, c in trend["halves"]:
+                arrow = ("worse " if d > DELTA_EPSILON
+                         else "better" if d < -DELTA_EPSILON else "flat  ")
                 line(f"  {a:5.2f} -> {b:5.2f}  {arrow}  {c}")
             line()
 
@@ -309,44 +455,26 @@ def report(conn: sqlite3.Connection, user: str, time_class: str | None = None,
     line("BY COLOUR AND TIME CONTROL")
     line("-" * 64)
     for key in ("my_colour", "time_class"):
-        agg: dict[str, list[int]] = defaultdict(lambda: [0, 0])
-        for g in games:
-            agg[g[key]][1] += g[moves_col] or 0
-        for m in serious:
-            agg[m[key]][0] += 1
-        for k, (e, mv) in sorted(agg.items()):
-            if mv:
-                line(f"  {k:<10} {e / mv * 100:5.2f} errors per 100 moves  ({mv} moves)")
+        for k, e, mv in model["by_colour_and_time_class"][key]:
+            line(f"  {k:<10} {e / mv * 100:5.2f} errors per 100 moves  ({mv} moves)")
     line()
 
-    eco: dict[str, list[int]] = defaultdict(lambda: [0, 0])
-    for g in games:
-        if g["eco"] != "?":
-            eco[g["eco"]][1] += 1
-    url_to_eco = {g["url"]: g["eco"] for g in games}
-    for m in serious:
-        e = url_to_eco.get(m["game_url"])
-        if e and e != "?":
-            eco[e][0] += 1
-    frequent = {k: v for k, v in eco.items() if v[1] >= 3}
-    if frequent:
+    if model["openings"]:
         line("-" * 64)
         line("OPENINGS YOU PLAY OFTEN")
         line("-" * 64)
-        for k, (e, n) in sorted(frequent.items(), key=lambda kv: -kv[1][0] / kv[1][1])[:8]:
+        for k, n, e in model["openings"]:
             line(f"  {k}   {n:3d} games   {e / n:.1f} serious errors per game")
         line()
 
     line("-" * 64)
-    line("TOP 10 POSITIONS TO REVIEW")
+    line(f"TOP {TOP_POSITIONS} POSITIONS TO REVIEW")
     line("-" * 64)
-    top = conn.execute(
-        f"SELECT * FROM mistakes {mistakes_where} AND severity IN ('mistake','blunder') "
-        f"ORDER BY cp_loss DESC LIMIT 10", mistakes_params).fetchall()
-    for m in top:
+    for m in model["positions"]:
         clk = f"{m['clock_seconds']:.0f}s" if m["clock_seconds"] is not None else "?"
         line(f"  -{m['cp_loss']:>4}cp  {m['date']}  move {m['move_number']:<3} "
-             f"played {m['played']:<7} best {m['best']:<7} clock {clk:>5}")
+             f"played {m['played']:<7} best {m['best']:<7} clock {clk:>5}  "
+             f"({m['occurrences']} times)")
         line(f"            {m['category']}")
         line(f"            {m['game_url']}")
     line()
