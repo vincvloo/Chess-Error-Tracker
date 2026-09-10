@@ -24,7 +24,7 @@ import os
 import sys
 
 from .analysis import INACCURACY, PHASES, backfill_phase_moves
-from .analysis_runner import run_analysis
+from .analysis_runner import DEFAULT_PARALLEL_THRESHOLD, DEFAULT_WORKERS, run_analysis
 from .chesscom import ChessComError
 from .db import open_db
 from .engine import ENGINE_HELP, find_engine
@@ -41,7 +41,7 @@ DEFAULT_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".chess-tracker.json
 # deliberately excluded: it stays a per-invocation, always-required flag
 # rather than something you'd want silently defaulted from a file.
 CONFIG_KEYS = {"email", "db", "engine", "depth", "threads", "pause",
-               "min_loss", "time_class"}
+               "min_loss", "time_class", "parallel_threshold", "workers"}
 
 
 def load_config(path: str, required: bool) -> dict:
@@ -112,6 +112,15 @@ def build_parser(config: dict | None = None) -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, help="Cap on new games analysed per run")
     p.add_argument("--min-loss", type=int, default=config.get("min_loss", INACCURACY))
     p.add_argument("--threads", type=int, default=config.get("threads", 2))
+    p.add_argument("--parallel-threshold", type=int,
+                   default=config.get("parallel_threshold", DEFAULT_PARALLEL_THRESHOLD),
+                   help="If more than this many games need analysis for a user, "
+                        "split the work across --workers processes instead of one "
+                        f"engine (default: {DEFAULT_PARALLEL_THRESHOLD})")
+    p.add_argument("--workers", type=int, default=config.get("workers", DEFAULT_WORKERS),
+                   help="Number of parallel analysis processes to use once a backlog "
+                        f"exceeds --parallel-threshold (default: {DEFAULT_WORKERS} on "
+                        "this machine). 1 disables parallelism.")
     p.add_argument("--pause", type=float, default=config.get("pause", 0.6),
                    help="Seconds between HTTP requests")
     p.add_argument("--report-only", action="store_true",
@@ -170,7 +179,8 @@ def main() -> None:
         try:
             run_analysis(conn, users, args.email, engine_path, args.depth, args.threads,
                          args.pause, since=args.since, time_class=args.time_class,
-                         limit=args.limit, min_loss=args.min_loss, quiet=args.quiet)
+                         limit=args.limit, min_loss=args.min_loss, quiet=args.quiet,
+                         parallel_threshold=args.parallel_threshold, workers=args.workers)
         except ChessComError as exc:
             sys.exit(str(exc))
 
