@@ -160,11 +160,11 @@ if (location.protocol.indexOf("http") === 0) {
       <div class="tablewrap"><table id="table"></table></div>
     </div>
     <div class="panel">
-      <h2>By phase (errors per 100 games)</h2>
+      <h2>By phase (errors per 100 moves)</h2>
       <div class="tablewrap"><table id="moveTable"></table></div>
     </div>
     <div class="panel">
-      <h2>Time pressure (errors per 100 games)</h2>
+      <h2>Time pressure (errors per 100 moves)</h2>
       <div class="tablewrap"><table id="clockTable"></table></div>
       <div id="clockNotes"></div>
     </div>
@@ -572,22 +572,14 @@ function renderMetricTable(elId, rowLabels, users, getValue) {
   table.innerHTML = thead + tbody;
 }
 
-// Total games analysed for one player under the current filters -- the
-// shared "per 100 games" denominator for the phase and time-pressure
-// panels below. Not phase-filtered (gamesFacts has no phase dim), matching
-// how "games in scope" already works everywhere else in the app.
-function gamesForUser(sel, user) {
-  return sumFacts(DATA.gamesFacts, userSel(sel, user), 0);
-}
-
 function renderPhaseTable(sel, users) {
   renderMetricTable("moveTable", DATA.lists.phases, users, (user, ri) => {
     const uSel = userSel(sel, user);
-    const games = gamesForUser(sel, user);
-    if (!games) return 0;
     const phaseSel = withOverride(uSel, { phase: new Set([ri]) });
+    const moves = movesFor(phaseSel);
+    if (!moves) return 0;
     const errors = sumFacts(DATA.countFacts, phaseSel);
-    return errors / games * 100;
+    return errors / moves * 100;
   });
 }
 
@@ -598,12 +590,12 @@ function renderClockTable(sel, users) {
     const uSel = userSel(sel, user);
     const arr = groupFacts(DATA.clockBucketFacts, uSel, "clockBucket", DATA.lists.clockBuckets);
     const total = arr.reduce((a, b) => a + b, 0);
-    const games = gamesForUser(sel, user);
-    return { user, arr, total, games };
+    const moves = movesFor(uSel);
+    return { user, arr, total, moves };
   });
   renderMetricTable("clockTable", DATA.lists.clockBuckets, users, (user, ri) => {
     const u = perUser.find(p => p.user === user);
-    return u.games ? u.arr[ri] / u.games * 100 : 0;
+    return u.moves ? u.arr[ri] / u.moves * 100 : 0;
   });
   perUser.forEach(({ user, arr, total }) => {
     if (!total) return;
