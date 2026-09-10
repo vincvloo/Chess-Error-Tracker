@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Settings - Chess Error Tracker{% endblock %}
 {% block content %}
+<div class="backnav"><a href="/">&larr; Home</a></div>
 {% if needs_email %}
 <div class="error">An email is required by Chess.com before fetching games. Set it below, then try Analyse again.</div>
 {% endif %}
