@@ -2,82 +2,102 @@
 {% block content %}
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 
+{% if onboarding %}
 <div class="panel">
-  <h2>Tracked users</h2>
+  <h2>Which account is yours?</h2>
+  <p class="muted">Pick your Chess.com username. It becomes the default for Analyse, Practice
+    and Achievements — other tracked players stay available too, just not the default.</p>
   {% if users %}
-  <table>
-    <thead><tr><th>User</th><th>Games</th><th>Moves</th><th>Err/100</th><th>Range</th><th></th></tr></thead>
-    <tbody>
-      {% for u in users %}
-      <tr>
-        <td>{{ u.username }}{% if u.thin_sample %} <span class="muted">(thin)</span>{% endif %}</td>
-        <td>{{ u.games }}</td>
-        <td>{{ u.moves }}</td>
-        <td>{{ "%.2f"|format(u.error_rate) }}</td>
-        <td>{{ u.first_game }} to {{ u.last_game }}</td>
-        <td><a class="button-link" href="/dashboard?users={{ u.username }}">Dashboard</a>
-          &nbsp;<a class="button-link" href="/practice?users={{ u.username }}">Practice</a></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  <form method="get" action="/dashboard" style="margin-top:12px">
-    <label>Compare users (comma-separated)</label>
-    <input type="text" name="users" placeholder="alice,bob"
-           value="{{ users|map(attribute='username')|join(',') }}">
-    <button type="submit">View dashboard</button>
+  <form method="post" action="/account">
+    <label>Already tracked</label>
+    <select name="username_select" onchange="document.getElementById('newuser').value = this.value">
+      <option value="">choose one…</option>
+      {% for u in users %}<option value="{{ u.username }}">{{ u.username }}</option>{% endfor %}
+    </select>
   </form>
-  {% else %}
-  <p class="muted">No users tracked yet. Fetch someone below to get started.</p>
   {% endif %}
+  <form method="post" action="/account">
+    <label>Or a new Chess.com username</label>
+    <input id="newuser" type="text" name="username" required placeholder="yourname">
+    <button type="submit">This is me</button>
+  </form>
+</div>
+
+{% else %}
+<div class="panel">
+  <h2>{{ primary_user }}</h2>
+  {% if primary %}
+  <p class="muted">{{ primary.games }} games · {{ primary.moves }} moves ·
+    {{ "%.2f"|format(primary.error_rate) }} errors/100 · {{ primary.first_game }} to {{ primary.last_game }}</p>
+  {% else %}
+  <p class="muted">Not analysed yet — hit Analyse below to fetch and analyse your games.</p>
+  {% endif %}
+
+  <div class="actions">
+    <form method="post" action="/jobs" style="margin:0">
+      <input type="hidden" name="user" value="{{ primary_user }}">
+      <input type="hidden" name="email" value="{{ settings.email }}">
+      <input type="hidden" name="depth" value="{{ settings.depth }}">
+      <input type="hidden" name="threads" value="{{ settings.threads }}">
+      <input type="hidden" name="pause" value="{{ settings.pause }}">
+      <input type="hidden" name="min_loss" value="{{ settings.min_loss }}">
+      <button type="submit" class="actioncard" style="width:100%;border:none;cursor:pointer;font:inherit">
+        Analyse<span class="sub">fetch + analyse your new games</span>
+      </button>
+    </form>
+    <a class="actioncard" href="/practice?users={{ primary_user }}">
+      Practice<span class="sub">try a mistake again</span></a>
+    <a class="actioncard" href="/achievements?users={{ primary_user }}">
+      Achievements<span class="sub">how you've improved</span></a>
+    <a class="actioncard" href="/dashboard?users={{ primary_user }}">
+      Dashboard<span class="sub">full stats &amp; filters</span></a>
+  </div>
 </div>
 
 <div class="panel">
-  <h2>Fetch &amp; analyse</h2>
+  <h2>Analyse more players</h2>
+  <p class="muted">Fetch someone else's games too — a friend, a rival, anyone on Chess.com.
+    Other settings (email, engine depth, etc.) are shared from the <a class="navlink" href="/settings">parameters page</a>.</p>
   <form method="post" action="/jobs">
-    <label>Chess.com username(s), comma-separated</label>
-    <input type="text" name="user" required placeholder="yourname,rival1">
-    <label>Contact email (required by Chess.com)</label>
-    <input type="email" name="email" required value="{{ default_email }}">
-    <div class="row">
-      <div>
-        <label>Depth</label>
-        <input type="number" name="depth" value="{{ default_depth }}">
-      </div>
-      <div>
-        <label>Threads</label>
-        <input type="number" name="threads" value="{{ default_threads }}">
-      </div>
-      <div>
-        <label>Pause (s)</label>
-        <input type="number" step="0.1" name="pause" value="{{ default_pause }}">
-      </div>
-      <div>
-        <label>Min loss (cp)</label>
-        <input type="number" name="min_loss" value="{{ default_min_loss }}">
-      </div>
-    </div>
+    <input type="hidden" name="email" value="{{ settings.email }}">
+    <input type="hidden" name="depth" value="{{ settings.depth }}">
+    <input type="hidden" name="threads" value="{{ settings.threads }}">
+    <input type="hidden" name="pause" value="{{ settings.pause }}">
+    <input type="hidden" name="min_loss" value="{{ settings.min_loss }}">
+    <label>Chess.com username</label>
+    <input type="text" name="user" required placeholder="rival1">
     <div class="row">
       <div>
         <label>Since (YYYY-MM, optional)</label>
         <input type="text" name="since" placeholder="2026-01">
       </div>
       <div>
-        <label>Time class (optional)</label>
-        <select name="time_class">
-          <option value="">any</option>
-          <option value="bullet">bullet</option>
-          <option value="blitz">blitz</option>
-          <option value="rapid">rapid</option>
-          <option value="daily">daily</option>
-        </select>
-      </div>
-      <div>
         <label>Limit new games (optional)</label>
-        <input type="number" name="limit" placeholder="">
+        <input type="number" name="limit" placeholder="how many games to fetch">
       </div>
     </div>
-    <button type="submit">Start</button>
+    <button type="submit">Fetch &amp; analyse</button>
   </form>
 </div>
+
+{% if others %}
+<div class="panel">
+  <h2>Other tracked players</h2>
+  <table>
+    <thead><tr><th>User</th><th>Games</th><th>Err/100</th><th></th></tr></thead>
+    <tbody>
+      {% for u in others %}
+      <tr>
+        <td>{{ u.username }}{% if u.thin_sample %} <span class="muted">(thin)</span>{% endif %}</td>
+        <td>{{ u.games }}</td>
+        <td>{{ "%.2f"|format(u.error_rate) }}</td>
+        <td><a class="button-link" href="/dashboard?users={{ u.username }}">Dashboard</a>
+          &nbsp;<a class="button-link" href="/practice?users={{ u.username }}">Practice</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endif %}
 {% endblock %}

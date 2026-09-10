@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Achievements - Chess Error Tracker{% endblock %}
+{% block content %}
+<div class="panel">
+  <h2>{{ username }}</h2>
+  {% if empty %}
+  <p class="muted">No stored games for {{ username }} yet — nothing to show here until you
+    <a class="navlink" href="/">Analyse</a>.</p>
+  {% else %}
+  <p class="muted">Based on your analysed games ({{ n_serious }} mistakes/blunders on record).
+    Practice-session results aren't tracked yet — this is purely how your actual play has moved
+    over time.</p>
+  {% endif %}
+</div>
+
+{% if not empty %}
+{% if has_trend %}
+<div class="panel">
+  <h2>Most improved</h2>
+  {% if improved %}
+  <table>
+    <thead><tr><th>category</th><th>first half</th><th>second half</th></tr></thead>
+    <tbody>
+      {% for delta, a, b, cat in improved %}
+      <tr><td>{{ cat }}</td><td>{{ "%.2f"|format(a) }}</td><td>{{ "%.2f"|format(b) }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No category has clearly improved yet — keep playing and analysing.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Keep an eye on</h2>
+  {% if worsened %}
+  <table>
+    <thead><tr><th>category</th><th>first half</th><th>second half</th></tr></thead>
+    <tbody>
+      {% for delta, a, b, cat in worsened %}
+      <tr><td>{{ cat }}</td><td>{{ "%.2f"|format(a) }}</td><td>{{ "%.2f"|format(b) }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Nothing trending worse right now.</p>
+  {% endif %}
+</div>
+{% else %}
+<div class="panel">
+  <p class="muted">Not enough tracked history yet to show a trend (need at least two months of
+    analysed games). The breakdown below still shows where your mistakes are concentrated.</p>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Where your mistakes are</h2>
+  <table>
+    <thead><tr><th>category</th><th>count</th></tr></thead>
+    <tbody>
+      {% for cat, n in recurring %}
+      <tr><td>{{ cat }}</td><td>{{ n }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

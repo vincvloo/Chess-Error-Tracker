@@ -1,5 +1,5 @@
-"""HTML page routes: home (tracked users + start-analysis form), job
-progress, the live dashboard, and practice mode."""
+"""HTML page routes: home (account + hub), settings, job progress, the live
+dashboard, achievements, and practice mode."""
 
 from __future__ import annotations
 
@@ -11,11 +11,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from ..analysis import INACCURACY
-from ..cli import DEFAULT_CONFIG_PATH, load_config
-from ..db import open_db
+from ..db import get_settings, open_db, set_settings
 from ..engine import ENGINE_HELP, find_engine
 from ..html_export import render_dashboard_html
-from ..reports import practice_queue, user_summaries
+from ..reports import practice_pool, practice_queue, report_model, user_summaries
 from .jobs import JobAlreadyRunningError
 
 router = APIRouter()
@@ -23,27 +22,73 @@ TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templa
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 
-def _home_context(request: Request, error: str | None = None) -> dict:
+def _hub_context(request: Request, error: str | None = None) -> dict:
+    """Context for the home page once a primary user (account) is set."""
     conn = open_db(request.app.state.db_path)
     try:
+        settings = get_settings(conn)
         users = user_summaries(conn)
     finally:
         conn.close()
-    config = load_config(DEFAULT_CONFIG_PATH, required=False)
+    primary = next((u for u in users if u["username"] == settings["primary_user"]), None)
+    others = [u for u in users if u["username"] != settings["primary_user"]]
     return {
-        "users": users,
-        "default_email": config.get("email", ""),
-        "default_depth": config.get("depth", 14),
-        "default_threads": config.get("threads", 2),
-        "default_pause": config.get("pause", 0.6),
-        "default_min_loss": config.get("min_loss", INACCURACY),
-        "error": error,
+        "onboarding": False,
+        "primary_user": settings["primary_user"], "primary": primary, "others": others,
+        "settings": settings, "error": error,
     }
 
 
 @router.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    return templates.TemplateResponse(request, "home.html", _home_context(request))
+    conn = open_db(request.app.state.db_path)
+    try:
+        settings = get_settings(conn)
+        users = user_summaries(conn)
+    finally:
+        conn.close()
+
+    if not settings["primary_user"]:
+        return templates.TemplateResponse(request, "home.html",
+            {"onboarding": True, "users": users, "error": None})
+
+    return templates.TemplateResponse(request, "home.html", _hub_context(request))
+
+
+@router.post("/account")
+def set_primary_user(request: Request, username: str = Form(...)):
+    username = username.strip().lower()
+    if username:
+        conn = open_db(request.app.state.db_path)
+        try:
+            set_settings(conn, primary_user=username)
+        finally:
+            conn.close()
+    return RedirectResponse("/", status_code=303)
+
+
+@router.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request, needs_email: str = "", saved: str = ""):
+    conn = open_db(request.app.state.db_path)
+    try:
+        settings = get_settings(conn)
+    finally:
+        conn.close()
+    return templates.TemplateResponse(request, "settings.html",
+        {"settings": settings, "needs_email": bool(needs_email), "saved": bool(saved)})
+
+
+@router.post("/settings")
+def save_settings(request: Request, email: str = Form(""), depth: int = Form(14),
+                  threads: int = Form(2), pause: float = Form(0.6),
+                  min_loss: int = Form(INACCURACY)):
+    conn = open_db(request.app.state.db_path)
+    try:
+        set_settings(conn, email=email.strip(), depth=depth, threads=threads,
+                    pause=pause, min_loss=min_loss)
+    finally:
+        conn.close()
+    return RedirectResponse("/settings?saved=1", status_code=303)
 
 
 @router.post("/jobs")
@@ -63,18 +108,18 @@ def start_job(
     if not users:
         return templates.TemplateResponse(
             request, "home.html",
-            _home_context(request, "Enter at least one Chess.com username."),
+            _hub_context(request, "Enter at least one Chess.com username."),
             status_code=400)
     if not email.strip():
-        return templates.TemplateResponse(
-            request, "home.html",
-            _home_context(request, "Email is required to fetch from Chess.com."),
-            status_code=400)
+        # Neither the Analyse nor Analyse-more-players form shows an email
+        # field any more (it's a saved setting) -- there's nothing to fix
+        # inline, so send the user to where they can actually set it.
+        return RedirectResponse("/settings?needs_email=1", status_code=303)
 
     engine_path = request.app.state.engine_path or find_engine()
     if not engine_path or not os.path.isfile(engine_path):
         return templates.TemplateResponse(
-            request, "home.html", _home_context(request, ENGINE_HELP), status_code=400)
+            request, "home.html", _hub_context(request, ENGINE_HELP), status_code=400)
 
     try:
         status = request.app.state.jobs.start_job(
@@ -85,7 +130,7 @@ def start_job(
             min_loss=min_loss)
     except JobAlreadyRunningError as exc:
         return templates.TemplateResponse(
-            request, "home.html", _home_context(request, str(exc)), status_code=409)
+            request, "home.html", _hub_context(request, str(exc)), status_code=409)
 
     return RedirectResponse(f"/jobs/{status.id}", status_code=303)
 
@@ -115,29 +160,95 @@ def dashboard(request: Request, users: str = ""):
     return HTMLResponse(html)
 
 
+@router.get("/achievements", response_class=HTMLResponse)
+def achievements_page(request: Request, users: str = ""):
+    """
+    How each mistake category has moved over time, for one player. Built
+    entirely from report_model()'s existing recurring-category counts and
+    first-half/second-half trend deltas -- no new queries, no practice-
+    attempt tracking (that stays a documented future layer, not a
+    dependency of this page).
+    """
+    user = next((u.strip() for u in users.split(",") if u.strip()), None)
+    conn = open_db(request.app.state.db_path)
+    try:
+        if not user:
+            settings = get_settings(conn)
+            user = settings["primary_user"]
+        model = report_model(conn, user) if user else None
+    finally:
+        conn.close()
+
+    if not user:
+        return HTMLResponse("<p>No user selected.</p>", status_code=400)
+    if model is None:
+        return templates.TemplateResponse(request, "achievements.html",
+            {"username": user, "empty": True})
+
+    halves = (model["trend"] or {}).get("halves") or []
+    improved = sorted((d for d in halves if d[0] < 0), key=lambda d: d[0])
+    worsened = sorted((d for d in halves if d[0] > 0), key=lambda d: -d[0])
+
+    return templates.TemplateResponse(request, "achievements.html", {
+        "username": user, "empty": False,
+        "n_serious": model["n_serious"], "recurring": model["recurring"],
+        "improved": improved, "worsened": worsened,
+        "has_trend": model["trend"] is not None,
+    })
+
+
+def _category_counts(conn, user: str) -> list[tuple[str, int]]:
+    model = report_model(conn, user)
+    return model["recurring"] if model else []
+
+
 @router.get("/practice", response_class=HTMLResponse)
 @router.get("/practice/{mistake_id}", response_class=HTMLResponse)
 def practice_page(request: Request, mistake_id: int | None = None, users: str = "",
-                  tc: str = "", phase: str = ""):
+                  tc: str = "", phase: str = "", category: str = "", extend: str = ""):
     """
     A queue of stored mistakes to try again, worst-then-most-recent first
-    (practice_queue()), for exactly one player. Reachable either from the
-    dashboard's "Positions to review" panel (a specific `mistake_id`) or the
-    home page's per-user "Practice" link (no id -> the queue's first entry).
+    (practice_queue()), for exactly one player and (once chosen) one
+    category. Reachable from the dashboard's "Positions to review" panel (a
+    specific `mistake_id`, category implied), the home page's Practice
+    button (no id, no category -> a category picker), or a category link
+    from that picker.
     """
     user = next((u.strip() for u in users.split(",") if u.strip()), None)
-    if not user:
-        return HTMLResponse("<p>No user selected.</p>", status_code=400)
-
     conn = open_db(request.app.state.db_path)
     try:
-        queue = practice_queue(conn, user, time_class=tc or None, phase=phase or None)
+        if not user:
+            user = get_settings(conn)["primary_user"]
+        if not user:
+            return HTMLResponse("<p>No user selected.</p>", status_code=400)
+
+        if not category and mistake_id is None:
+            categories = _category_counts(conn, user)
+            if not categories:
+                return templates.TemplateResponse(request, "practice.html",
+                    {"empty": True, "pickCategory": False, "username": user})
+            return templates.TemplateResponse(request, "practice.html", {
+                "empty": False, "pickCategory": True, "username": user,
+                "categories": categories, "tc": tc, "phase": phase,
+            })
+
+        queue = practice_queue(conn, user, time_class=tc or None, phase=phase or None,
+                               category=category or None)
+        pool_available = 0
+        if category:
+            pool_available = len(practice_pool(conn, category, exclude_user=user,
+                                                time_class=tc or None, phase=phase or None))
+        if extend == "1" and category:
+            pool = practice_pool(conn, category, exclude_user=user,
+                                 time_class=tc or None, phase=phase or None)
+            queue = list(queue) + list(pool)
+            pool_available = 0
     finally:
         conn.close()
 
     if not queue:
         return templates.TemplateResponse(request, "practice.html",
-            {"empty": True, "username": user})
+            {"empty": True, "pickCategory": False, "username": user})
 
     if mistake_id is None:
         index = 0
@@ -152,6 +263,7 @@ def practice_page(request: Request, mistake_id: int | None = None, users: str = 
     row = queue[index]
     board = chess.Board(row["fen"])
     legal_moves = [m.uci() for m in board.legal_moves]
+    near_end = (index >= len(queue) - 3) and pool_available > 0 and extend != "1"
 
     data = {
         "mistakeId": row["id"],
@@ -162,12 +274,16 @@ def practice_page(request: Request, mistake_id: int | None = None, users: str = 
         "category": row["category"],
         "cpLoss": row["cp_loss"],
         "gameUrl": row["game_url"],
+        "owner": row["username"],
         "legalMoves": legal_moves,
         "queuePosition": index + 1,
         "queueTotal": len(queue),
         "nextId": queue[index + 1]["id"] if index + 1 < len(queue) else None,
         "prevId": queue[index - 1]["id"] if index > 0 else None,
-        "users": user, "tc": tc, "phaseFilter": phase,
+        "users": user, "tc": tc, "phaseFilter": phase, "categoryFilter": category,
+        "nearEnd": near_end, "poolAvailable": pool_available, "extended": extend == "1",
+        "extendUrl": f"/practice/{row['id']}?users={user}&tc={tc}&phase={phase}"
+                    f"&category={category}&extend=1",
     }
     return templates.TemplateResponse(request, "practice.html",
-        {"empty": False, "username": user, "data": data})
+        {"empty": False, "pickCategory": False, "username": user, "data": data})

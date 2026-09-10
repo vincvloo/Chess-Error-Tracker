@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 import chess
 from fastapi.testclient import TestClient
 
-from chess_tracker.db import open_db, save_game
+from chess_tracker.db import get_settings, open_db, save_game, set_settings
 from chess_tracker.web.app import create_app
 from chess_tracker.web.jobs import JobAlreadyRunningError
 
@@ -80,7 +80,7 @@ def _practice_seeded_db(tmp_path, mistakes=None) -> str:
 
 def test_practice_page_renders_position_without_revealing_best_move(tmp_path):
     client = TestClient(create_app(_practice_seeded_db(tmp_path)))
-    r = client.get("/practice", params={"users": "alice"})
+    r = client.get("/practice", params={"users": "alice", "category": "hung a pawn"})
     assert r.status_code == 200
     assert "alice" in r.text
     assert _START_FEN in r.text
@@ -102,11 +102,23 @@ def test_practice_page_with_no_id_resolves_to_the_queue_first_entry(tmp_path):
         _practice_mistake("https://x/g1", move_number=2, fen=_PROMOTION_FEN, best="a8=Q"),
     ])
     client = TestClient(create_app(db_path))
-    no_id = client.get("/practice", params={"users": "alice"})
+    no_id = client.get("/practice", params={"users": "alice", "category": "hung a pawn"})
     with_id = client.get("/practice/2", params={"users": "alice"})  # higher id sorts first
     assert no_id.status_code == with_id.status_code == 200
     assert _PROMOTION_FEN in no_id.text
     assert _PROMOTION_FEN in with_id.text
+
+
+def test_practice_page_with_no_category_shows_a_category_picker(tmp_path):
+    db_path = _practice_seeded_db(tmp_path, mistakes=[
+        _practice_mistake("https://x/g1", move_number=1),
+    ])
+    client = TestClient(create_app(db_path))
+    r = client.get("/practice", params={"users": "alice"})
+    assert r.status_code == 200
+    assert "what do you want to work on" in r.text
+    assert "hung a pawn" in r.text
+    assert _START_FEN not in r.text  # no position picked yet, so no board data
 
 
 def test_practice_page_404s_for_a_mistake_outside_the_scope(tmp_path):
@@ -240,11 +252,38 @@ def test_home_page_lists_tracked_users(tmp_path):
     assert "alice" in r.text
 
 
-def test_home_page_with_empty_db_shows_no_users_message(tmp_path):
+def test_home_page_with_no_primary_user_shows_onboarding(tmp_path):
     client = TestClient(create_app(_empty_db(tmp_path)))
     r = client.get("/")
     assert r.status_code == 200
-    assert "No users tracked yet" in r.text
+    assert "Which account is yours?" in r.text
+
+
+def test_home_page_shows_hub_once_primary_user_is_set(tmp_path):
+    db_path = _seeded_db(tmp_path)
+    conn = open_db(db_path)
+    set_settings(conn, primary_user="alice")
+    conn.close()
+
+    client = TestClient(create_app(db_path))
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "Which account is yours?" not in r.text
+    assert "alice" in r.text
+    assert 'href="/practice?users=alice"' in r.text
+    assert 'href="/achievements?users=alice"' in r.text
+
+
+def test_set_primary_user_persists_and_redirects_home(tmp_path):
+    db_path = _empty_db(tmp_path)
+    client = TestClient(create_app(db_path), follow_redirects=False)
+    r = client.post("/account", data={"username": "Alice"})
+    assert r.status_code == 303
+    assert r.headers["location"] == "/"
+
+    conn = open_db(db_path)
+    assert get_settings(conn)["primary_user"] == "alice"  # lowercased
+    conn.close()
 
 
 def test_dashboard_route_returns_html_for_known_user(tmp_path):
@@ -286,10 +325,13 @@ def test_start_job_requires_a_username(tmp_path):
 
 
 def test_start_job_requires_email(tmp_path):
-    client = TestClient(create_app(_seeded_db(tmp_path)))
+    # Neither Analyse nor Analyse-more-players shows an email field any
+    # more (it's a saved setting), so there's nothing to fix inline --
+    # missing email sends the user to the parameters page instead of a 400.
+    client = TestClient(create_app(_seeded_db(tmp_path)), follow_redirects=False)
     r = client.post("/jobs", data={"user": "bob", "email": ""})
-    assert r.status_code == 400
-    assert "Email is required" in r.text
+    assert r.status_code == 303
+    assert r.headers["location"] == "/settings?needs_email=1"
 
 
 def test_start_job_reports_missing_engine(tmp_path, monkeypatch):
@@ -330,3 +372,131 @@ def test_job_progress_page_404s_for_unknown_job(tmp_path):
     client = TestClient(create_app(_seeded_db(tmp_path)))
     r = client.get("/jobs/nonexistent")
     assert r.status_code == 404
+
+
+# ---- settings page ----------------------------------------------------
+
+def test_settings_page_shows_current_values(tmp_path):
+    db_path = _seeded_db(tmp_path)
+    conn = open_db(db_path)
+    set_settings(conn, email="me@example.com", depth=18)
+    conn.close()
+
+    client = TestClient(create_app(db_path))
+    r = client.get("/settings")
+    assert r.status_code == 200
+    assert 'value="me@example.com"' in r.text
+    assert 'value="18"' in r.text
+
+
+def test_settings_page_save_persists_and_redirects(tmp_path):
+    db_path = _seeded_db(tmp_path)
+    client = TestClient(create_app(db_path), follow_redirects=False)
+    r = client.post("/settings", data={
+        "email": "new@example.com", "depth": "20", "threads": "4",
+        "pause": "1.2", "min_loss": "60",
+    })
+    assert r.status_code == 303
+    assert r.headers["location"] == "/settings?saved=1"
+
+    conn = open_db(db_path)
+    settings = get_settings(conn)
+    conn.close()
+    assert settings["email"] == "new@example.com"
+    assert settings["depth"] == 20
+    assert settings["pause"] == 1.2
+
+
+# ---- achievements page --------------------------------------------------
+
+def _achievement_game(url, username, date, moves=100, om=100, mm=0, em=0):
+    return {
+        "url": url, "username": username, "end_time": 1000, "date": date,
+        "time_class": "blitz", "my_colour": "white", "my_rating": 1500,
+        "opp_rating": 1400, "result": "win", "eco": "C00",
+        "moves_played": moves, "opening_moves": om, "middlegame_moves": mm,
+        "endgame_moves": em,
+    }
+
+
+def _achievement_mistake(url, username, date, category):
+    return {
+        "game_url": url, "username": username, "date": date, "end_time": 1000,
+        "time_class": "blitz", "my_rating": 1500, "my_colour": "white",
+        "move_number": 5, "phase": "opening", "severity": "blunder", "cp_loss": 300,
+        "category": category, "played": "d4", "best": "e4",
+        "clock_seconds": 20.0, "fen": _START_FEN,
+    }
+
+
+def test_achievements_page_with_no_data_shows_empty_state(tmp_path):
+    client = TestClient(create_app(_empty_db(tmp_path)))
+    r = client.get("/achievements", params={"users": "nobody"})
+    assert r.status_code == 200
+    assert "nothing to show here" in r.text
+
+
+def test_achievements_page_requires_a_user(tmp_path):
+    client = TestClient(create_app(_empty_db(tmp_path)))
+    r = client.get("/achievements")
+    assert r.status_code == 400
+
+
+def test_achievements_page_shows_category_trend_deltas(tmp_path):
+    db_path = str(tmp_path / "ach.db")
+    conn = open_db(db_path)
+    save_game(conn, _achievement_game("https://x/a1", "alice", "2024-01-01"),
+             [_achievement_mistake("https://x/a1", "alice", "2024-01-01", "beta"),
+              _achievement_mistake("https://x/a1", "alice", "2024-01-01", "beta")],
+             depth=14)
+    save_game(conn, _achievement_game("https://x/a2", "alice", "2024-02-01"), [], depth=14)
+    save_game(conn, _achievement_game("https://x/a3", "alice", "2024-03-01"), [], depth=14)
+    save_game(conn, _achievement_game("https://x/a4", "alice", "2024-04-01"),
+             [_achievement_mistake("https://x/a4", "alice", "2024-04-01", "alpha"),
+              _achievement_mistake("https://x/a4", "alice", "2024-04-01", "alpha")],
+             depth=14)
+    conn.close()
+
+    client = TestClient(create_app(db_path))
+    r = client.get("/achievements", params={"users": "alice"})
+    assert r.status_code == 200
+    assert "alpha" in r.text
+    assert "beta" in r.text
+    assert "Most improved" in r.text
+
+
+# ---- practice: extend to other players' mistakes -------------------------
+
+def test_practice_extend_pulls_in_other_players_tagged_by_owner(tmp_path):
+    db_path = str(tmp_path / "extend.db")
+    conn = open_db(db_path)
+    save_game(conn, _achievement_game("https://x/a1", "alice", "2024-01-01"),
+             [_achievement_mistake("https://x/a1", "alice", "2024-01-01", "hung a piece")],
+             depth=14)
+    save_game(conn, _achievement_game("https://x/b1", "bob", "2024-01-01"),
+             [_achievement_mistake("https://x/b1", "bob", "2024-01-01", "hung a piece"),
+              _achievement_mistake("https://x/b1", "bob", "2024-01-01", "hung a piece")],
+             depth=14)
+    conn.close()
+
+    client = TestClient(create_app(db_path))
+    picked = client.get("/practice", params={"users": "alice", "category": "hung a piece"})
+    assert picked.status_code == 200
+    assert "Include them" in picked.text  # alice only has 1, bob has 2 more available
+
+    extended = client.get("/practice", params={
+        "users": "alice", "category": "hung a piece", "extend": "1"})
+    assert extended.status_code == 200
+    assert extended.text.count("position 1 of 3") == 1  # alice's 1 + bob's 2, pooled
+    assert "Include them" not in extended.text
+
+    # Once extended, stepping through the queue with Next must keep carrying
+    # extend=1 -- otherwise a pooled (other player's) position id looked up
+    # again under the un-extended (own-only) queue 404s.
+    import re
+    next_href = re.search(r'id="nextLink" href="([^"]+)"', extended.text).group(1)
+    assert "extend=1" in next_href
+    followed = client.get(next_href.replace("&amp;", "&"))
+    assert followed.status_code == 200
+    assert "position 2 of 3" in followed.text
+    assert "@bob" in followed.text  # a pooled row, tagged with its owner

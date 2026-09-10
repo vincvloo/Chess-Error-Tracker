@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-from .analysis import GameRecord, MistakeRecord
+from .analysis import INACCURACY, GameRecord, MistakeRecord
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS games (
@@ -78,10 +78,47 @@ CREATE TABLE IF NOT EXISTS runs (
     depth         INTEGER
 );
 
+-- Web-app-only key/value settings: which tracked player is "you" (so
+-- Practice/Achievements/Analyse have a default), plus the fetch parameters
+-- (email, depth, threads, pause, min_loss) the home page pre-fills instead
+-- of asking for on every run. The CLI's own ~/.chess-tracker.json config is
+-- untouched -- this table only exists for chess-tracker serve.
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_mistakes_user ON mistakes(username);
 CREATE INDEX IF NOT EXISTS idx_mistakes_cat  ON mistakes(username, category);
 CREATE INDEX IF NOT EXISTS idx_games_user    ON games(username, end_time);
 """
+
+SETTINGS_DEFAULTS = {
+    "primary_user": None, "email": "", "depth": 14, "threads": 2,
+    "pause": 0.6, "min_loss": INACCURACY,
+}
+
+
+def get_settings(conn: sqlite3.Connection) -> dict:
+    """All web-app settings, stored values merged over SETTINGS_DEFAULTS.
+    Values come back cast to the same type as their default (settings are
+    stored as TEXT -- sqlite has no other choice for a generic key/value
+    table)."""
+    stored = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM settings")}
+    merged = dict(SETTINGS_DEFAULTS)
+    for key, value in stored.items():
+        default = SETTINGS_DEFAULTS.get(key)
+        merged[key] = type(default)(value) if default is not None else value
+    return merged
+
+
+def set_settings(conn: sqlite3.Connection, **kwargs) -> None:
+    """Upsert one or more settings, e.g. set_settings(conn, depth=16)."""
+    with conn:
+        conn.executemany(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [(k, str(v)) for k, v in kwargs.items()])
 
 
 def open_db(path: str) -> sqlite3.Connection:

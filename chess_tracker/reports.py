@@ -229,7 +229,7 @@ def bar(n: int, total: int, width: int = 28) -> str:
 
 
 def practice_queue(conn: sqlite3.Connection, user: str, time_class: str | None = None,
-                    phase: str | None = None) -> list[sqlite3.Row]:
+                    phase: str | None = None, category: str | None = None) -> list[sqlite3.Row]:
     """
     Mistakes ordered for practice: worst first, then most recent among ties,
     then a stable id -- the same total order as "positions to review" in the
@@ -240,11 +240,41 @@ def practice_queue(conn: sqlite3.Connection, user: str, time_class: str | None =
     """
     u = user.lower()
     _, _, mistakes_where, mistakes_params = _scope(u, time_class, phase)
+    if category:
+        mistakes_where += " AND category = ?"
+        mistakes_params.append(category)
     return conn.execute(
         f"SELECT * FROM mistakes {mistakes_where} "
         f"AND severity IN ({','.join('?' * len(SERIOUS))}) "
         f"ORDER BY cp_loss DESC, end_time DESC, id DESC LIMIT ?",
         [*mistakes_params, *SERIOUS, PRACTICE_QUEUE_LIMIT]).fetchall()
+
+
+def practice_pool(conn: sqlite3.Connection, category: str, exclude_user: str | None = None,
+                  time_class: str | None = None, phase: str | None = None) -> list[sqlite3.Row]:
+    """
+    Same ordering and severity scope as practice_queue(), but across every
+    tracked player instead of one -- for practice mode's "extend to others
+    making the same mistake" prompt, once a player's own queue for a
+    category is running low. `exclude_user` leaves out the player whose own
+    queue is already shown (their rows would otherwise be duplicated).
+    """
+    where = "WHERE category = ?"
+    params: list = [category]
+    if exclude_user:
+        where += " AND username != ?"
+        params.append(exclude_user.lower())
+    if time_class:
+        where += " AND time_class = ?"
+        params.append(time_class)
+    if phase:
+        where += " AND phase = ?"
+        params.append(phase)
+    return conn.execute(
+        f"SELECT * FROM mistakes {where} "
+        f"AND severity IN ({','.join('?' * len(SERIOUS))}) "
+        f"ORDER BY cp_loss DESC, end_time DESC, id DESC LIMIT ?",
+        [*params, *SERIOUS, PRACTICE_QUEUE_LIMIT]).fetchall()
 
 
 def report_model(conn: sqlite3.Connection, user: str, time_class: str | None = None,
