@@ -27,7 +27,8 @@ header { padding: 20px 24px 8px; }
 #stickyProgress.show { display: flex; }
 #stickyProgress .track { flex: 1; max-width: 320px; height: 6px; border-radius: 4px;
   background: var(--bg); border: 1px solid var(--border); overflow: hidden; }
-#stickyProgress .fill { background: var(--accent); height: 100%; width: 0%; transition: width .3s; }
+#stickyProgress .fill { display: block; background: var(--accent); height: 100%; width: 0%;
+  transition: width .3s; }
 #stickyProgress .pct { color: var(--muted); min-width: 3em; text-align: right; }
 h1 { font-size: 20px; margin: 0 0 2px; }
 h1 a { color: inherit; text-decoration: none; }

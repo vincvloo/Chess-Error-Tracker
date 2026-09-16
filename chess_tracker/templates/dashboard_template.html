@@ -42,7 +42,8 @@ h1 { font-size: 20px; margin: 0 0 2px; }
 #stickyProgress.show { display: flex; }
 #stickyProgress .track { flex: 1; max-width: 320px; height: 6px; border-radius: 4px;
   background: var(--bg); border: 1px solid var(--border); overflow: hidden; }
-#stickyProgress .fill { background: var(--accent); height: 100%; width: 0%; transition: width .3s; }
+#stickyProgress .fill { display: block; background: var(--accent); height: 100%; width: 0%;
+  transition: width .3s; }
 #stickyProgress .pct { color: var(--muted); min-width: 3em; text-align: right; }
 .app { display: grid; grid-template-columns: 260px 1fr; gap: 20px; padding: 16px 24px 40px; align-items: start; }
 @media (max-width: 800px) { .app { grid-template-columns: 1fr; } }
