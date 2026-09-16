@@ -3,7 +3,8 @@
 {% block content %}
 <div class="panel">
   <h2>Analysing</h2>
-  <a class="button-link" href="/">Go to my data now &mdash; this keeps running in the background</a>
+  <a class="button-link" href="/dashboard?users={{ (users|join(','))|urlencode }}">Go to my data now
+    &mdash; this keeps running in the background</a>
   <p id="status-text" class="muted" style="margin-top:10px">Starting...</p>
   <div style="background:var(--bg);border-radius:6px;height:10px;overflow:hidden;border:1px solid var(--border)">
     <div id="bar" style="background:var(--accent);height:100%;width:0%;transition:width .2s"></div>
@@ -40,8 +41,13 @@
 <script>
 const jobId = {{ job_id|tojson }};
 const bigUpdateThreshold = {{ big_update_threshold }};
-const isSingleUser = {{ (users|length == 1)|tojson }};
+const jobUsers = {{ users|tojson }};
+const isSingleUser = jobUsers.length === 1;
 let bigUpdateShown = false;
+
+function dashboardUrl() {
+  return "/dashboard?users=" + encodeURIComponent(jobUsers.join(","));
+}
 
 const statusText = document.getElementById("status-text");
 const bar = document.getElementById("bar");
@@ -56,7 +62,7 @@ cancelBtn.addEventListener("click", () => {
 });
 
 document.getElementById("bigUpdateContinueBtn").addEventListener("click", () => {
-  window.location.href = "/";
+  window.location.href = dashboardUrl();
 });
 document.getElementById("bigUpdateNarrowBtn").addEventListener("click", () => {
   narrowForm.style.display = "";

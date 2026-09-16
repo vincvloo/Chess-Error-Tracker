@@ -632,6 +632,19 @@ def test_job_progress_page_includes_big_update_threshold_and_settings(tmp_path, 
     assert 'name="since"' in r.text
 
 
+def test_job_progress_page_data_link_points_at_the_jobs_own_users(tmp_path, monkeypatch):
+    # regression: this used to link to "/" and dropped the user back on the
+    # home page instead of back at the dashboard/practice/compare view they
+    # were updating.
+    app = create_app(_seeded_db(tmp_path), engine_path=_fake_engine_path(tmp_path))
+    monkeypatch.setattr(app.state.jobs, "get_status",
+                        lambda job_id: {"users": ["alice", "bob"], "state": "running"})
+    client = TestClient(app)
+    r = client.get("/jobs/whatever")
+    assert r.status_code == 200
+    assert 'href="/dashboard?users=alice%2Cbob"' in r.text
+
+
 # ---- settings page ----------------------------------------------------
 
 def test_settings_page_shows_current_values(tmp_path):
