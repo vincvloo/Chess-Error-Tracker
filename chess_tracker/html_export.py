@@ -89,7 +89,7 @@ def build_dashboard_data(conn: sqlite3.Connection, users: list[str]) -> dict:
                 "users": [], "timeClasses": [], "phases": phases,
                 "severities": list(SEVERITIES), "categories": [],
                 "colours": list(COLOURS), "ecos": [], "months": [],
-                "clockBuckets": list(CLOCK_BUCKET_LABELS),
+                "clockBuckets": list(CLOCK_BUCKET_LABELS), "userMeta": {},
             },
             "movesFacts": _fact_table(["user", "tc", "phase", "month"], ["moves"], []),
             "gamesFacts": _fact_table(["user", "tc", "month"],
@@ -273,12 +273,23 @@ def build_dashboard_data(conn: sqlite3.Connection, users: list[str]) -> dict:
             "first": r["first_date"], "last": r["last_date"],
         }
 
+    # Per-user freshness: when this player's data was actually last analysed
+    # (games.analysed_at, set on every save_game()), not when this page
+    # happened to be rendered -- see html_export.py's own __GENERATED_AT__,
+    # which answers a different question.
+    updated_rows = conn.execute(f"""
+        SELECT username, MAX(analysed_at) AS last_updated
+        FROM games WHERE username IN ({placeholders})
+        GROUP BY username
+    """, users).fetchall()
+    user_meta = {r["username"]: {"lastUpdated": r["last_updated"]} for r in updated_rows}
+
     return {
         "lists": {
             "users": present, "timeClasses": time_classes, "phases": phases,
             "severities": list(SEVERITIES), "categories": categories,
             "colours": list(COLOURS), "ecos": ecos, "months": months,
-            "clockBuckets": list(CLOCK_BUCKET_LABELS),
+            "clockBuckets": list(CLOCK_BUCKET_LABELS), "userMeta": user_meta,
         },
         "movesFacts": _fact_table(["user", "tc", "phase", "month"], ["moves"], moves_data),
         "gamesFacts": _fact_table(["user", "tc", "month"],

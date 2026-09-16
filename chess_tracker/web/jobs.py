@@ -30,6 +30,17 @@ class JobAlreadyRunningError(Exception):
     """Raised by start_job() when a job is already in flight."""
 
 
+# Caps the very first analysis run so onboarding doesn't leave someone
+# staring at a progress bar through their whole game history -- roughly 5
+# minutes at the default depth/settings (see analysis_runner's 20-40s/game).
+FIRST_RUN_GAME_LIMIT = 10
+
+# Above this many games needing analysis in a single-user job, the progress
+# page offers a choice (keep going in the background / narrow the date
+# range) instead of just grinding through a plain progress bar.
+BIG_UPDATE_THRESHOLD = 12
+
+
 @dataclass
 class JobStatus:
     id: str
@@ -131,6 +142,14 @@ class JobManager:
         with self._lock:
             status = self._jobs.get(job_id)
             return None if status is None else status.to_dict()
+
+    def get_active_job_id(self) -> str | None:
+        """The id of the currently in-flight job, if any -- lets any page's
+        JS discover "is something running right now" without already
+        knowing a job_id (e.g. the sticky progress bar shown on every
+        page)."""
+        with self._lock:
+            return self._active_job_id
 
     def cancel(self, job_id: str) -> bool:
         with self._lock:

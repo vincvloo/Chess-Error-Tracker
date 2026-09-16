@@ -497,7 +497,25 @@ def test_start_job_rejects_when_already_running(tmp_path, monkeypatch):
     assert r.status_code == 409
 
 
+def test_active_job_endpoint_returns_null_when_idle(tmp_path):
+    client = TestClient(create_app(_seeded_db(tmp_path)))
+    r = client.get("/api/jobs/active")
+    assert r.status_code == 200
+    assert r.json() == {"job_id": None}
+
+
+def test_active_job_endpoint_returns_running_job_id(tmp_path, monkeypatch):
+    app = create_app(_seeded_db(tmp_path))
+    monkeypatch.setattr(app.state.jobs, "get_active_job_id", lambda: "fake-job-id")
+    r = TestClient(app).get("/api/jobs/active")
+    assert r.status_code == 200
+    assert r.json() == {"job_id": "fake-job-id"}
+
+
 def test_job_status_endpoint_returns_404_for_unknown_job(tmp_path):
+    # regression guard: /api/jobs/active must be registered ahead of
+    # /api/jobs/{job_id}, or "active" gets swallowed as a job_id and this
+    # route (and the two above) would misbehave
     client = TestClient(create_app(_seeded_db(tmp_path)))
     r = client.get("/api/jobs/nonexistent")
     assert r.status_code == 404

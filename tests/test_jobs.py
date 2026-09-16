@@ -120,3 +120,26 @@ def test_cancel_unknown_job_returns_false(tmp_path):
 
 def test_get_status_unknown_job_returns_none(tmp_path):
     assert _jobs(tmp_path).get_status("nonexistent") is None
+
+
+def test_get_active_job_id_reflects_running_and_finished_state(tmp_path, monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_run_analysis(conn, users, email, engine_path, depth, threads, pause,
+                          progress_cb=None, cancel_event=None, **kwargs):
+        started.set()
+        release.wait(timeout=2)
+
+    monkeypatch.setattr("chess_tracker.web.jobs.run_analysis", fake_run_analysis)
+
+    jobs = _jobs(tmp_path)
+    assert jobs.get_active_job_id() is None
+
+    status = jobs.start_job(["alice"], "you@example.com", "/fake/engine", 14, 2, 0.1)
+    assert started.wait(timeout=2)
+    assert jobs.get_active_job_id() == status.id
+
+    release.set()
+    _wait_for(jobs, status.id)
+    assert jobs.get_active_job_id() is None

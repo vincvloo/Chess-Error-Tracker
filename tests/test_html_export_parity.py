@@ -238,6 +238,27 @@ def test_openings_match_report_model():
                     assert errors == expected_e, (user, tc, phase, eco, "errors")
 
 
+def test_user_meta_last_updated_reflects_analysed_at():
+    conn = _seeded_db()
+    conn.execute("UPDATE games SET analysed_at = '2024-01-01T00:00:00' WHERE username = 'alice'")
+    conn.execute("UPDATE games SET analysed_at = '2024-05-01T00:00:00' "
+                 "WHERE username = 'alice' AND url = 'https://x/a5'")
+    conn.execute("UPDATE games SET analysed_at = '2024-02-01T00:00:00' WHERE username = 'bob'")
+    conn.commit()
+
+    data = build_dashboard_data(conn, ["alice", "bob"])
+    user_meta = data["lists"]["userMeta"]
+
+    assert user_meta["alice"]["lastUpdated"] == "2024-05-01T00:00:00"
+    assert user_meta["bob"]["lastUpdated"] == "2024-02-01T00:00:00"
+
+
+def test_user_meta_empty_when_no_games_stored():
+    conn = open_db(":memory:")
+    data = build_dashboard_data(conn, ["nobody"])
+    assert data["lists"]["userMeta"] == {}
+
+
 def test_severity_filter_changes_counts_as_expected():
     """The dashboard's severity filter is new -- there is no report_model()
     equivalent to compare against (the terminal report never varied

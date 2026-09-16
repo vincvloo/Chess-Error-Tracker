@@ -275,6 +275,12 @@ def run_analysis(conn: sqlite3.Connection, users: list[str], email: str, engine_
             logger.info(f"[{user}] {len(games)} games known, {len(todo)} need "
                         f"analysis at depth {depth}")
 
+            # Fires before any engine work starts, so a caller (the web
+            # app's JobManager) learns the total almost instantly -- well
+            # before waiting for game 1 to actually finish analysing.
+            if progress_cb is not None:
+                progress_cb(user, 0, len(todo))
+
             use_parallel = (workers > 1 and len(todo) > parallel_threshold
                             and db_path is not None)
 

@@ -49,6 +49,16 @@ def _judge_with_engine(engine_path: str | None, board_before: chess.Board,
     return ("also_fine" if cp_loss < MISTAKE else "mistake"), cp_loss
 
 
+@router.get("/jobs/active")
+def active_job(request: Request):
+    """Whether a job is currently running, and its id if so -- lets any
+    page's JS discover this without already knowing a job_id. Registered
+    ahead of /jobs/{job_id} since Starlette matches path routes in
+    registration order; otherwise "active" would be swallowed as a
+    job_id."""
+    return {"job_id": request.app.state.jobs.get_active_job_id()}
+
+
 @router.get("/jobs/{job_id}")
 def job_status(request: Request, job_id: str):
     status = request.app.state.jobs.get_status(job_id)
