@@ -3,23 +3,71 @@
 {% block content %}
 <div class="panel">
   <h2>Analysing</h2>
-  <p id="status-text" class="muted">Starting...</p>
+  <a class="button-link" href="/">Go to my data now &mdash; this keeps running in the background</a>
+  <p id="status-text" class="muted" style="margin-top:10px">Starting...</p>
   <div style="background:var(--bg);border-radius:6px;height:10px;overflow:hidden;border:1px solid var(--border)">
     <div id="bar" style="background:var(--accent);height:100%;width:0%;transition:width .2s"></div>
   </div>
   <div id="result" style="margin-top:14px"></div>
   <button id="cancel-btn" type="button" style="background:var(--danger)">Cancel</button>
 </div>
+
+<div class="panel" id="bigUpdatePanel" style="display:none">
+  <h2>This is a bigger update</h2>
+  <p class="muted" id="bigUpdateNote"></p>
+  <div class="btnrow">
+    <button type="button" id="bigUpdateContinueBtn" class="btn-secondary">
+      Keep going in the background &mdash; take me to my data now</button>
+    <button type="button" id="bigUpdateNarrowBtn" class="btn-secondary">
+      Narrow the date range instead</button>
+  </div>
+  <form method="post" action="/jobs" id="narrowForm" style="display:none;margin-top:12px">
+    <input type="hidden" name="user" value="{{ users[0] if users else '' }}">
+    <input type="hidden" name="email" value="{{ settings.email }}">
+    <input type="hidden" name="depth" value="{{ settings.depth }}">
+    <input type="hidden" name="threads" value="{{ settings.threads }}">
+    <input type="hidden" name="pause" value="{{ settings.pause }}">
+    <input type="hidden" name="min_loss" value="{{ settings.min_loss }}">
+    <label>Only fetch games since (YYYY-MM)</label>
+    <input type="text" name="since" id="sinceInput" placeholder="2026-06">
+    <div class="btnrow">
+      <button type="button" id="clearSinceBtn" class="btn-secondary">Clear</button>
+      <button type="submit">Start narrower update</button>
+    </div>
+  </form>
+</div>
+
 <script>
 const jobId = {{ job_id|tojson }};
+const bigUpdateThreshold = {{ big_update_threshold }};
+const isSingleUser = {{ (users|length == 1)|tojson }};
+let bigUpdateShown = false;
+
 const statusText = document.getElementById("status-text");
 const bar = document.getElementById("bar");
 const result = document.getElementById("result");
 const cancelBtn = document.getElementById("cancel-btn");
+const bigUpdatePanel = document.getElementById("bigUpdatePanel");
+const narrowForm = document.getElementById("narrowForm");
 
 cancelBtn.addEventListener("click", () => {
   fetch(`/api/jobs/${jobId}/cancel`, {method: "POST"});
   cancelBtn.disabled = true;
+});
+
+document.getElementById("bigUpdateContinueBtn").addEventListener("click", () => {
+  window.location.href = "/";
+});
+document.getElementById("bigUpdateNarrowBtn").addEventListener("click", () => {
+  narrowForm.style.display = "";
+});
+document.getElementById("clearSinceBtn").addEventListener("click", () => {
+  document.getElementById("sinceInput").value = "";
+});
+narrowForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  await fetch(`/api/jobs/${jobId}/cancel`, {method: "POST"});
+  narrowForm.submit();
 });
 
 function dashboardLink(users) {
@@ -37,6 +85,14 @@ async function poll() {
     statusText.textContent = s.current_user
       ? `[${s.current_user}] analysed ${s.current_index}/${s.current_total}`
       : "Starting...";
+
+    if (!bigUpdateShown && isSingleUser && s.current_total > bigUpdateThreshold) {
+      bigUpdateShown = true;
+      document.getElementById("bigUpdateNote").textContent =
+        s.current_total + " games need analysis — that could take a while.";
+      bigUpdatePanel.style.display = "";
+    }
+
     setTimeout(poll, 1000);
     return;
   }

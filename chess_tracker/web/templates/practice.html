@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_update_control.html" import update_control %}
 {% block title %}Practice - Chess Error Tracker{% endblock %}
 {% block head %}
 <style>
@@ -47,7 +48,10 @@
 {% block content %}
 {% if empty %}
 <div class="panel">
-  <h2>Practice</h2>
+  <div class="headerrow">
+    <h2>Practice</h2>
+    {{ update_control(username, settings) }}
+  </div>
   <p class="muted">No stored mistakes to practice for {{ username }} under this filter.</p>
   <a class="button-link" href="/">Back home</a>
 </div>
@@ -55,7 +59,10 @@
 {% elif pickCategory %}
 <div class="panel">
   <div class="backnav"><a href="/">&larr; Home</a></div>
-  <h2>{{ username }} &mdash; what do you want to work on?</h2>
+  <div class="headerrow">
+    <h2>{{ username }} &mdash; what do you want to work on?</h2>
+    {{ update_control(username, settings) }}
+  </div>
   {% if categories %}
   <table>
     <thead><tr><th>category</th><th>count</th><th></th></tr></thead>
@@ -76,9 +83,12 @@
 
 {% else %}
 <div class="panel">
-  <div class="backnav">
-    <a href="/">&larr; Home</a> &middot;
-    <a href="/practice?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}">Change category</a>
+  <div class="backnav headerrow">
+    <span>
+      <a href="/">&larr; Home</a> &middot;
+      <a href="/practice?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}">Change category</a>
+    </span>
+    {{ update_control(username, settings) }}
   </div>
   <div class="practicehead">
     <div>

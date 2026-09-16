@@ -21,9 +21,17 @@
 body { margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
 header { padding: 20px 24px 8px; }
+#stickyProgress { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel);
+  border-top: 1px solid var(--border); padding: 8px 16px; display: none;
+  align-items: center; gap: 10px; font-size: 12.5px; text-decoration: none; color: var(--text); }
+#stickyProgress.show { display: flex; }
+#stickyProgress .track { flex: 1; max-width: 320px; height: 6px; border-radius: 4px;
+  background: var(--bg); border: 1px solid var(--border); overflow: hidden; }
+#stickyProgress .fill { background: var(--accent); height: 100%; width: 0%; transition: width .3s; }
+#stickyProgress .pct { color: var(--muted); min-width: 3em; text-align: right; }
 h1 { font-size: 20px; margin: 0 0 2px; }
 h1 a { color: inherit; text-decoration: none; }
-main { padding: 16px 24px 40px; max-width: 760px; }
+main { padding: 16px 24px 56px; max-width: 760px; }
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   padding: 16px 18px; margin-bottom: 16px; }
 h2 { font-size: 15px; margin: 0 0 12px; }
@@ -80,5 +88,66 @@ a.button-link { display: inline-block; margin-top: 4px; font-size: 12.5px; color
 <main>
 {% block content %}{% endblock %}
 </main>
+<a id="stickyProgress" href="/jobs/">
+  <span id="stickyProgressLabel">Updating&hellip;</span>
+  <span class="track"><span class="fill" id="stickyProgressFill"></span></span>
+  <span class="pct" id="stickyProgressPct"></span>
+</a>
+<script>
+(function () {
+  var bar = document.getElementById("stickyProgress");
+  var label = document.getElementById("stickyProgressLabel");
+  var fill = document.getElementById("stickyProgressFill");
+  var pct = document.getElementById("stickyProgressPct");
+  var onProgressPage = /^\/jobs\/[^/]+$/.test(location.pathname);
+  var currentJobId = null;
+
+  function showJob(jobId) {
+    currentJobId = jobId;
+    bar.href = "/jobs/" + jobId;
+    bar.classList.add("show");
+  }
+
+  function hideJob() {
+    currentJobId = null;
+    bar.classList.remove("show");
+  }
+
+  async function pollJob() {
+    if (!currentJobId) return;
+    let s;
+    try {
+      s = await (await fetch("/api/jobs/" + currentJobId)).json();
+    } catch (e) {
+      return;
+    }
+    if (s.state === "running" || s.state === "queued") {
+      var p = s.current_total ? Math.round(s.current_index / s.current_total * 100) : 0;
+      fill.style.width = p + "%";
+      pct.textContent = p + "%";
+      label.textContent = s.current_user ? "Updating " + s.current_user : "Starting…";
+    } else {
+      hideJob();
+    }
+  }
+
+  async function pollActive() {
+    if (currentJobId) return;
+    try {
+      var r = await (await fetch("/api/jobs/active")).json();
+      if (r.job_id) showJob(r.job_id);
+    } catch (e) {
+      // ignore -- try again next tick
+    }
+  }
+
+  // The dedicated progress page has its own, more detailed bar -- the
+  // sticky one only needs to appear everywhere else.
+  if (!onProgressPage) {
+    setInterval(function () { currentJobId ? pollJob() : pollActive(); }, 1500);
+    pollActive();
+  }
+})();
+</script>
 </body>
 </html>

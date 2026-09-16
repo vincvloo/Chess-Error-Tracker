@@ -8,6 +8,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from .analysis import PHASES
+from .db import get_settings
 from .reports import (
     CLOCK_BUCKET_LABELS,
     CLOCK_BUCKET_SQL_CASE,
@@ -328,6 +329,17 @@ def render_dashboard_html(conn: sqlite3.Connection, users: list[str]) -> tuple[s
     data = build_dashboard_data(conn, users)
     if not data["lists"]["users"]:
         return None
+
+    # Only the live web app's Update button (client-side JS in
+    # dashboard_template.html) needs these -- a --export-html file opened
+    # with no server has nowhere to send the form anyway (guarded by the
+    # same location.protocol check as the "Home" link).
+    settings = get_settings(conn)
+    data["meta"]["settings"] = {
+        "email": settings["email"], "depth": settings["depth"],
+        "threads": settings["threads"], "pause": settings["pause"],
+        "min_loss": settings["min_loss"],
+    }
 
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     with open(TEMPLATE_PATH, encoding="utf-8") as f:

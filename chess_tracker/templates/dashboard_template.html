@@ -26,6 +26,24 @@ h1 { font-size: 20px; margin: 0 0 2px; }
 .backnav { margin-bottom: 8px; font-size: 12.5px; }
 .backnav a { color: var(--muted); text-decoration: none; }
 .backnav a:hover { color: var(--accent); }
+.headerrow { display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 12px; flex-wrap: wrap; }
+.headerrow button, .headerrow .btn-secondary { font: inherit; padding: 7px 14px;
+  border-radius: 7px; cursor: pointer; font-size: 12.5px; font-weight: 600;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text); }
+.headerrow button:hover { border-color: var(--accent); color: var(--accent); }
+#demoBanner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--accent-soft); margin: 0 24px 16px; font-size: 12.5px; }
+#demoBanner a { color: var(--accent); text-decoration: none; }
+#demoBannerStatus { color: var(--muted); }
+#stickyProgress { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel);
+  border-top: 1px solid var(--border); padding: 8px 16px; display: none;
+  align-items: center; gap: 10px; font-size: 12.5px; text-decoration: none; color: var(--text); }
+#stickyProgress.show { display: flex; }
+#stickyProgress .track { flex: 1; max-width: 320px; height: 6px; border-radius: 4px;
+  background: var(--bg); border: 1px solid var(--border); overflow: hidden; }
+#stickyProgress .fill { background: var(--accent); height: 100%; width: 0%; transition: width .3s; }
+#stickyProgress .pct { color: var(--muted); min-width: 3em; text-align: right; }
 .app { display: grid; grid-template-columns: 260px 1fr; gap: 20px; padding: 16px 24px 40px; align-items: start; }
 @media (max-width: 800px) { .app { grid-template-columns: 1fr; } }
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
@@ -95,9 +113,27 @@ td.practicecell a:hover { text-decoration: underline; }
 <body>
 <header>
   <div class="backnav" id="homeNav" style="display:none"><a href="/">&larr; Home</a></div>
-  <h1>Chess Mistake Explorer</h1>
-  <div class="meta">Generated __GENERATED_AT__ &middot; filter by player, game phase, time class, severity and mistake type</div>
+  <div class="headerrow">
+    <div>
+      <h1>Chess Mistake Explorer</h1>
+      <div class="meta">Generated __GENERATED_AT__ &middot; filter by player, game phase, time class, severity and mistake type</div>
+    </div>
+    <form method="post" action="/jobs" id="updateForm" style="display:none">
+      <input type="hidden" name="user" id="updateUser">
+      <input type="hidden" name="email" id="updateEmail">
+      <input type="hidden" name="depth" id="updateDepth">
+      <input type="hidden" name="threads" id="updateThreads">
+      <input type="hidden" name="pause" id="updatePause">
+      <input type="hidden" name="min_loss" id="updateMinLoss">
+      <button type="submit" class="btn-secondary">Update</button>
+    </form>
+  </div>
 </header>
+<div class="panel" id="demoBanner" style="display:none">
+  <strong>This is sample data</strong> &mdash; a look at what your dashboard will show.
+  <span id="demoBannerStatus"></span>
+  <a href="/" id="demoBannerSkip">Skip to my dashboard</a>
+</div>
 <script>
 // Only show a "Home" link when this page is actually being served by the
 // app (this same HTML is also a fully standalone --export-html file opened
@@ -284,7 +320,28 @@ function colorFor(user) {
   return PALETTE[idx % PALETTE.length];
 }
 
-function buildGroup(containerId, items, selectedSet) {
+// "2026-09-11T19:57:02+00:00" -> "2d ago". Used only for display -- filter
+// membership, colours and URLs always key off the raw username.
+function relativeTime(iso) {
+  if (!iso) return null;
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return null;
+  const seconds = Math.max(0, (Date.now() - then) / 1000);
+  const units = [["y", 31536000], ["mo", 2592000], ["d", 86400], ["h", 3600], ["m", 60]];
+  for (const [label, secs] of units) {
+    const n = Math.floor(seconds / secs);
+    if (n >= 1) return n + label + " ago";
+  }
+  return "just now";
+}
+
+function userLabel(u) {
+  const meta = DATA.lists.userMeta && DATA.lists.userMeta[u];
+  const ago = meta && meta.lastUpdated ? relativeTime(meta.lastUpdated) : null;
+  return ago ? u + " (updated " + ago + ")" : u;
+}
+
+function buildGroup(containerId, items, selectedSet, labelFor) {
   const el = document.getElementById(containerId);
   el.innerHTML = "";
   items.forEach(item => {
@@ -298,7 +355,7 @@ function buildGroup(containerId, items, selectedSet) {
       render();
     });
     const span = document.createElement("span");
-    span.textContent = item;
+    span.textContent = labelFor ? labelFor(item) : item;
     label.appendChild(input);
     label.appendChild(span);
     el.appendChild(label);
@@ -484,7 +541,7 @@ function renderTrend(sel, users, bkts) {
   });
 
   document.getElementById("trendLegend").innerHTML = users.map(u =>
-    '<span class="item"><span class="swatch" style="background:' + colorFor(u) + '"></span>' + u + '</span>'
+    '<span class="item"><span class="swatch" style="background:' + colorFor(u) + '"></span>' + userLabel(u) + '</span>'
   ).join("");
 
   document.getElementById("trendWarnNote").innerHTML = anyThin
@@ -541,7 +598,7 @@ function renderLatestDeltas(sel, users, bkts) {
     const result = latestDeltasFor(sel, user, bkts);
     if (!result || !result.rows.length) return;
     const h3 = document.createElement("h3");
-    h3.textContent = user + " — " + result.label;
+    h3.textContent = userLabel(user) + " — " + result.label;
     el.appendChild(h3);
     result.rows.forEach(({ d, a, b, cat }) => {
       const row = document.createElement("div");
@@ -560,7 +617,7 @@ function renderLatestDeltas(sel, users, bkts) {
 function renderMetricTable(elId, rowLabels, users, getValue) {
   const table = document.getElementById(elId);
   if (!users.length || !rowLabels.length) { table.innerHTML = ""; return; }
-  let thead = "<thead><tr><th></th>" + users.map(u => "<th>" + u + "</th>").join("") + "</tr></thead>";
+  let thead = "<thead><tr><th></th>" + users.map(u => "<th>" + userLabel(u) + "</th>").join("") + "</tr></thead>";
   let tbody = "<tbody>";
   rowLabels.forEach((label, ri) => {
     const vals = users.map(u => getValue(u, ri));
@@ -618,7 +675,7 @@ function renderColourTc(sel, users) {
   users.forEach(user => {
     const uSel = userSel(sel, user);
     const h3 = document.createElement("h3");
-    h3.textContent = user;
+    h3.textContent = userLabel(user);
     el.appendChild(h3);
 
     const colourHead = document.createElement("div");
@@ -720,7 +777,7 @@ function renderOpenings(sel, users) {
     if (!rows.length) return;
     any = true;
     const h3 = document.createElement("h3");
-    h3.textContent = user;
+    h3.textContent = userLabel(user);
     el.appendChild(h3);
     rows.forEach(r => {
       const row = document.createElement("div");
@@ -756,7 +813,7 @@ function render() {
     row.className = "barrow";
     const width = t.r == null ? 0 : (t.r / maxR * 100);
     row.innerHTML =
-      '<div class="barlabel" title="' + t.u + '">' + t.u + '</div>' +
+      '<div class="barlabel" title="' + t.u + '">' + userLabel(t.u) + '</div>' +
       '<div class="bartrack"><div class="barfill" style="width:' + width + '%"></div></div>' +
       '<div class="barvalue">' + (t.r == null ? "–" : t.r.toFixed(2)) + '</div>';
     barsEl.appendChild(row);
@@ -778,7 +835,7 @@ function render() {
   // with exactly one player selected.
   const showPractice = users.length === 1;
   const table = document.getElementById("table");
-  let thead = "<thead><tr><th>mistake type</th>" + users.map(u => "<th>" + u + "</th>").join("") +
+  let thead = "<thead><tr><th>mistake type</th>" + users.map(u => "<th>" + userLabel(u) + "</th>").join("") +
     (showPractice ? "<th></th>" : "") + "</tr></thead>";
   let tbody = "<tbody>";
   tbody += '<tr class="total-row"><td>ALL ERRORS</td>' +
@@ -839,7 +896,7 @@ function render() {
   }
 }
 
-buildGroup("chk-users", DATA.lists.users, state.users);
+buildGroup("chk-users", DATA.lists.users, state.users, userLabel);
 buildGroup("chk-phases", DATA.lists.phases, state.phases);
 buildGroup("chk-tc", DATA.lists.timeClasses, state.timeClasses);
 buildGroup("chk-severities", DATA.lists.severities, state.severities);
@@ -858,6 +915,80 @@ document.getElementById("granularity").addEventListener("click", e => {
   render();
 });
 render();
+
+// ---- Update control, demo banner, sticky progress bar -- all guarded to
+// the live web app; a --export-html file opened via file:// has no server
+// to post to or poll, same guard as the "Home" link above. ----
+if (location.protocol.indexOf("http") === 0) {
+  if (DATA.meta.demo) {
+    document.getElementById("demoBanner").style.display = "flex";
+    const statusEl = document.getElementById("demoBannerStatus");
+    const jobId = new URLSearchParams(location.search).get("job");
+    if (jobId) {
+      (function pollDemoJob() {
+        fetch("/api/jobs/" + jobId).then(r => r.json()).then(s => {
+          if (s.state === "running" || s.state === "queued") {
+            const pct = s.current_total ? Math.round(s.current_index / s.current_total * 100) : 0;
+            statusEl.textContent = "Your real analysis is running in the background… " + pct + "%";
+            setTimeout(pollDemoJob, 1500);
+          } else if (s.state === "done") {
+            statusEl.textContent = "Done! Taking you to your dashboard…";
+            setTimeout(() => {
+              window.location.href = "/dashboard?users=" + encodeURIComponent(s.users.join(","));
+            }, 1200);
+          }
+        }).catch(() => {});
+      })();
+    }
+  } else if (DATA.meta.settings) {
+    const s = DATA.meta.settings;
+    document.getElementById("updateUser").value = DATA.lists.users.join(",");
+    document.getElementById("updateEmail").value = s.email;
+    document.getElementById("updateDepth").value = s.depth;
+    document.getElementById("updateThreads").value = s.threads;
+    document.getElementById("updatePause").value = s.pause;
+    document.getElementById("updateMinLoss").value = s.min_loss;
+    document.getElementById("updateForm").style.display = "";
+  }
+
+  const bar = document.getElementById("stickyProgress");
+  const barLabel = document.getElementById("stickyProgressLabel");
+  const barFill = document.getElementById("stickyProgressFill");
+  const barPct = document.getElementById("stickyProgressPct");
+  let activeJobId = null;
+
+  async function pollStickyBar() {
+    if (activeJobId) {
+      let s;
+      try { s = await (await fetch("/api/jobs/" + activeJobId)).json(); } catch (e) { return; }
+      if (s.state === "running" || s.state === "queued") {
+        const p = s.current_total ? Math.round(s.current_index / s.current_total * 100) : 0;
+        barFill.style.width = p + "%";
+        barPct.textContent = p + "%";
+        barLabel.textContent = s.current_user ? "Updating " + s.current_user : "Starting…";
+      } else {
+        activeJobId = null;
+        bar.classList.remove("show");
+      }
+      return;
+    }
+    try {
+      const r = await (await fetch("/api/jobs/active")).json();
+      if (r.job_id) {
+        activeJobId = r.job_id;
+        bar.href = "/jobs/" + r.job_id;
+        bar.classList.add("show");
+      }
+    } catch (e) { /* try again next tick */ }
+  }
+  setInterval(pollStickyBar, 1500);
+  pollStickyBar();
+}
 </script>
+<a id="stickyProgress" href="/jobs/">
+  <span id="stickyProgressLabel">Updating&hellip;</span>
+  <span class="track"><span class="fill" id="stickyProgressFill"></span></span>
+  <span class="pct" id="stickyProgressPct"></span>
+</a>
 </body>
 </html>
