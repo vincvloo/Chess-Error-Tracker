@@ -222,6 +222,11 @@ if (location.protocol.indexOf("http") === 0) {
     </div>
   </main>
 </div>
+<a id="stickyProgress" href="/jobs/">
+  <span id="stickyProgressLabel">Updating&hellip;</span>
+  <span class="track"><span class="fill" id="stickyProgressFill"></span></span>
+  <span class="pct" id="stickyProgressPct"></span>
+</a>
 <script id="agg">
 const DATA = __DATA_JSON__;
 
@@ -986,10 +991,5 @@ if (location.protocol.indexOf("http") === 0) {
   pollStickyBar();
 }
 </script>
-<a id="stickyProgress" href="/jobs/">
-  <span id="stickyProgressLabel">Updating&hellip;</span>
-  <span class="track"><span class="fill" id="stickyProgressFill"></span></span>
-  <span class="pct" id="stickyProgressPct"></span>
-</a>
 </body>
 </html>
