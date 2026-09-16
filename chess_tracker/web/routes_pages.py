@@ -180,10 +180,23 @@ def job_progress_page(request: Request, job_id: str):
     conn = open_db(request.app.state.db_path)
     try:
         settings = get_settings(conn)
+        # Games per month, for the big-update interstitial's date-range
+        # picker. Only meaningful (and only offered) for a single-user job.
+        # This costs nothing extra: by the time a job's total is known to
+        # exceed the threshold, its monthly Chess.com archives have already
+        # been fetched and cached in `archives` (see chesscom.py) -- this is
+        # a plain local read, no network call.
+        density = []
+        if len(status["users"]) == 1:
+            rows = conn.execute(
+                "SELECT month, game_count FROM archives "
+                "WHERE username = ? AND month IS NOT NULL ORDER BY month",
+                (status["users"][0],)).fetchall()
+            density = [{"month": r["month"], "games": r["game_count"] or 0} for r in rows]
     finally:
         conn.close()
     return templates.TemplateResponse(request, "progress.html", {
-        "job_id": job_id, "users": status["users"],
+        "job_id": job_id, "users": status["users"], "density": density,
         "settings": settings, "big_update_threshold": BIG_UPDATE_THRESHOLD,
     })
 

@@ -29,11 +29,14 @@
     <input type="hidden" name="threads" value="{{ settings.threads }}">
     <input type="hidden" name="pause" value="{{ settings.pause }}">
     <input type="hidden" name="min_loss" value="{{ settings.min_loss }}">
-    <label>Only fetch games since (YYYY-MM)</label>
-    <input type="text" name="since" id="sinceInput" placeholder="2026-06">
+    <input type="hidden" name="since" id="sinceInput" value="">
+    <label>Only fetch games since</label>
+    <div id="densityBars" style="display:flex;align-items:flex-end;gap:1px;height:40px;margin-top:6px"></div>
+    <input type="range" id="sinceSlider" min="0" max="0" value="0" style="width:100%;margin-top:4px">
+    <p class="muted" id="sinceLabel" style="margin-top:6px"></p>
     <div class="btnrow">
-      <button type="button" id="clearSinceBtn" class="btn-secondary">Clear</button>
-      <button type="submit">Start narrower update</button>
+      <button type="button" id="clearSinceBtn" class="btn-secondary">Clear &mdash; use the full range</button>
+      <button type="submit" id="narrowSubmitBtn">Start narrower update</button>
     </div>
   </form>
 </div>
@@ -43,6 +46,11 @@ const jobId = {{ job_id|tojson }};
 const bigUpdateThreshold = {{ big_update_threshold }};
 const jobUsers = {{ users|tojson }};
 const isSingleUser = jobUsers.length === 1;
+const density = {{ density|tojson }};
+// A rough, fixed estimate (matches the ~5-minutes-for-10-games reasoning
+// behind FIRST_RUN_GAME_LIMIT/BIG_UPDATE_THRESHOLD) -- not measured from
+// this run, just enough to give a ballpark before it starts.
+const SECONDS_PER_GAME = 30;
 let bigUpdateShown = false;
 
 function dashboardUrl() {
@@ -55,6 +63,63 @@ const result = document.getElementById("result");
 const cancelBtn = document.getElementById("cancel-btn");
 const bigUpdatePanel = document.getElementById("bigUpdatePanel");
 const narrowForm = document.getElementById("narrowForm");
+const sinceInput = document.getElementById("sinceInput");
+const densityBars = document.getElementById("densityBars");
+const sinceSlider = document.getElementById("sinceSlider");
+const sinceLabel = document.getElementById("sinceLabel");
+const narrowSubmitBtn = document.getElementById("narrowSubmitBtn");
+
+// Cumulative[i] = games from month i (inclusive) through today -- what
+// "only fetch games since months[i]" would actually mean size-wise.
+let cumulative = [];
+if (density.length) {
+  cumulative = new Array(density.length);
+  let running = 0;
+  for (let i = density.length - 1; i >= 0; i--) {
+    running += density[i].games;
+    cumulative[i] = running;
+  }
+  const maxCount = Math.max(...density.map(d => d.games), 1);
+  density.forEach(d => {
+    const b = document.createElement("div");
+    b.style.flex = "1";
+    b.style.height = Math.max(2, Math.round(d.games / maxCount * 100)) + "%";
+    b.style.borderRadius = "1px";
+    b.title = d.month + ": " + d.games + " game" + (d.games === 1 ? "" : "s");
+    densityBars.appendChild(b);
+  });
+  sinceSlider.max = density.length - 1;
+
+  // Default to as much recent history as fits under the threshold, so the
+  // picker opens already showing a range that should finish quickly --
+  // sliding further back (more history) is opt-in from there.
+  let defaultIndex = density.length - 1;
+  for (let i = density.length - 1; i >= 0; i--) {
+    if (cumulative[i] <= bigUpdateThreshold) defaultIndex = i; else break;
+  }
+  sinceSlider.value = defaultIndex;
+  updateSinceLabel();
+} else {
+  densityBars.style.display = "none";
+  sinceSlider.style.display = "none";
+  sinceLabel.textContent = "Couldn't load a game-count breakdown for this range -- " +
+    "Start narrower update with this cleared will fetch everything.";
+}
+
+function updateSinceLabel() {
+  if (!density.length) return;
+  const i = parseInt(sinceSlider.value, 10);
+  const month = density[i].month;
+  const games = cumulative[i];
+  const minutes = Math.max(1, Math.round(games * SECONDS_PER_GAME / 60));
+  sinceInput.value = month;
+  sinceLabel.textContent = month + " → today: ~" + games + " game" + (games === 1 ? "" : "s") +
+    ", about " + minutes + " minute" + (minutes === 1 ? "" : "s");
+  Array.from(densityBars.children).forEach((el, idx) => {
+    el.style.background = idx >= i ? "var(--accent)" : "var(--border)";
+  });
+}
+sinceSlider.addEventListener("input", updateSinceLabel);
 
 cancelBtn.addEventListener("click", () => {
   fetch(`/api/jobs/${jobId}/cancel`, {method: "POST"});
@@ -68,11 +133,23 @@ document.getElementById("bigUpdateNarrowBtn").addEventListener("click", () => {
   narrowForm.style.display = "";
 });
 document.getElementById("clearSinceBtn").addEventListener("click", () => {
-  document.getElementById("sinceInput").value = "";
+  sinceSlider.value = 0;
+  updateSinceLabel();
 });
 narrowForm.addEventListener("submit", async (e) => {
   e.preventDefault();
+  narrowSubmitBtn.disabled = true;
+  narrowSubmitBtn.textContent = "Stopping the current update…";
   await fetch(`/api/jobs/${jobId}/cancel`, {method: "POST"});
+  // The running job only checks for cancellation between games, so it can
+  // take a little while to actually stop -- submitting immediately used to
+  // race it and hit "a job is already running" (409). Wait for it to
+  // genuinely finish first.
+  while (true) {
+    const s = await (await fetch(`/api/jobs/${jobId}`)).json();
+    if (s.state !== "running" && s.state !== "queued") break;
+    await new Promise(r => setTimeout(r, 300));
+  }
   narrowForm.submit();
 });
 

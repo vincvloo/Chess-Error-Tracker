@@ -1,3 +1,5 @@
+import threading
+import time
 from unittest.mock import MagicMock
 
 import chess
@@ -585,6 +587,48 @@ def test_start_job_rejects_when_already_running(tmp_path, monkeypatch):
     assert r.status_code == 409
 
 
+def test_cancelling_does_not_free_the_slot_until_the_thread_actually_exits(tmp_path, monkeypatch):
+    # Regression for the "narrow the date range" flow: cancelling only sets
+    # a cooperative flag the background thread checks between games, so the
+    # slot stays taken for a moment after /cancel returns. Submitting a new
+    # job right away used to race this and hit 409; the fix (in progress.html)
+    # is to poll /api/jobs/{id} until it's no longer running/queued before
+    # resubmitting. This proves both halves: the race is real, and waiting
+    # for the real state (not just the cancel call) resolves it.
+    db_path = _seeded_db(tmp_path)
+    app = create_app(db_path, engine_path=_fake_engine_path(tmp_path))
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_run_analysis(conn, users, email, engine_path, depth, threads, pause,
+                          progress_cb=None, cancel_event=None, **kwargs):
+        started.set()
+        release.wait(timeout=2)  # only "notices" cancellation once released
+
+    monkeypatch.setattr("chess_tracker.web.jobs.run_analysis", slow_run_analysis)
+    client = TestClient(app, follow_redirects=False)
+
+    r1 = client.post("/jobs", data={"user": "alice", "email": "you@example.com"})
+    assert r1.status_code == 303
+    job_id = r1.headers["location"].split("/")[-1]
+    assert started.wait(timeout=2)
+
+    client.post(f"/api/jobs/{job_id}/cancel")
+    # Immediately after /cancel, the thread hasn't actually stopped yet --
+    # the slot is still taken.
+    r2 = client.post("/jobs", data={"user": "bob", "email": "you@example.com"})
+    assert r2.status_code == 409
+
+    release.set()
+    deadline = time.time() + 2
+    while time.time() < deadline and app.state.jobs.get_active_job_id() is not None:
+        time.sleep(0.01)
+    assert app.state.jobs.get_active_job_id() is None
+
+    r3 = client.post("/jobs", data={"user": "bob", "email": "you@example.com"})
+    assert r3.status_code == 303
+
+
 def test_active_job_endpoint_returns_null_when_idle(tmp_path):
     client = TestClient(create_app(_seeded_db(tmp_path)))
     r = client.get("/api/jobs/active")
@@ -630,6 +674,36 @@ def test_job_progress_page_includes_big_update_threshold_and_settings(tmp_path, 
     assert r.status_code == 200
     assert str(BIG_UPDATE_THRESHOLD) in r.text
     assert 'name="since"' in r.text
+
+
+def test_job_progress_page_includes_game_density_for_a_single_user_job(tmp_path, monkeypatch):
+    db_path = _seeded_db(tmp_path)
+    conn = open_db(db_path)
+    conn.execute("INSERT INTO archives (url, username, month, game_count, complete) "
+                 "VALUES (?, ?, ?, ?, 1)", ("https://x/archive1", "alice", "2026-06", 5))
+    conn.execute("INSERT INTO archives (url, username, month, game_count, complete) "
+                 "VALUES (?, ?, ?, ?, 1)", ("https://x/archive2", "alice", "2026-07", 3))
+    conn.commit()
+    conn.close()
+
+    app = create_app(db_path, engine_path=_fake_engine_path(tmp_path))
+    monkeypatch.setattr(app.state.jobs, "get_status",
+                        lambda job_id: {"users": ["alice"], "state": "running"})
+    client = TestClient(app)
+    r = client.get("/jobs/whatever")
+    assert r.status_code == 200
+    assert '"2026-06"' in r.text
+    assert '"2026-07"' in r.text
+
+
+def test_job_progress_page_has_no_density_for_a_multi_user_job(tmp_path, monkeypatch):
+    app = create_app(_seeded_db(tmp_path), engine_path=_fake_engine_path(tmp_path))
+    monkeypatch.setattr(app.state.jobs, "get_status",
+                        lambda job_id: {"users": ["alice", "bob"], "state": "running"})
+    client = TestClient(app)
+    r = client.get("/jobs/whatever")
+    assert r.status_code == 200
+    assert "const density = [];" in r.text
 
 
 def test_job_progress_page_data_link_points_at_the_jobs_own_users(tmp_path, monkeypatch):
