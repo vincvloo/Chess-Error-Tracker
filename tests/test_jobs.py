@@ -3,9 +3,10 @@ import time
 
 import pytest
 
+from chess_tracker.analysis_runner import DEFAULT_PARALLEL_THRESHOLD
 from chess_tracker.chesscom import ChessComError
 from chess_tracker.db import open_db
-from chess_tracker.web.jobs import JobAlreadyRunningError, JobManager
+from chess_tracker.web.jobs import FIRST_RUN_GAME_LIMIT, JobAlreadyRunningError, JobManager
 
 
 def _wait_for(jobs: JobManager, job_id: str, timeout: float = 2.0) -> dict:
@@ -22,6 +23,13 @@ def _jobs(tmp_path) -> JobManager:
     db_path = str(tmp_path / "test.db")
     open_db(db_path).close()
     return JobManager(db_path)
+
+
+def test_first_run_game_limit_matches_the_parallel_threshold():
+    # Deliberate: a new user with enough history to hit the onboarding cap
+    # gets split across every worker the machine has, same as any other job
+    # this size -- see FIRST_RUN_GAME_LIMIT's own comment for the reasoning.
+    assert FIRST_RUN_GAME_LIMIT == DEFAULT_PARALLEL_THRESHOLD == 100
 
 
 def test_start_job_reaches_done_state(tmp_path, monkeypatch):
@@ -120,3 +128,26 @@ def test_cancel_unknown_job_returns_false(tmp_path):
 
 def test_get_status_unknown_job_returns_none(tmp_path):
     assert _jobs(tmp_path).get_status("nonexistent") is None
+
+
+def test_get_active_job_id_reflects_running_and_finished_state(tmp_path, monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_run_analysis(conn, users, email, engine_path, depth, threads, pause,
+                          progress_cb=None, cancel_event=None, **kwargs):
+        started.set()
+        release.wait(timeout=2)
+
+    monkeypatch.setattr("chess_tracker.web.jobs.run_analysis", fake_run_analysis)
+
+    jobs = _jobs(tmp_path)
+    assert jobs.get_active_job_id() is None
+
+    status = jobs.start_job(["alice"], "you@example.com", "/fake/engine", 14, 2, 0.1)
+    assert started.wait(timeout=2)
+    assert jobs.get_active_job_id() == status.id
+
+    release.set()
+    _wait_for(jobs, status.id)
+    assert jobs.get_active_job_id() is None

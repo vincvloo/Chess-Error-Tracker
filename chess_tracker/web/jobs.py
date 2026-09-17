@@ -30,6 +30,29 @@ class JobAlreadyRunningError(Exception):
     """Raised by start_job() when a job is already in flight."""
 
 
+# The estimate every "how long will this take" figure in the app is built
+# from -- see analysis_runner's own 20-40s/game note; 30 sits in the middle.
+SECONDS_PER_GAME = 30
+
+# Caps the very first analysis run so onboarding doesn't leave someone
+# staring at a progress bar through their whole game history. Matches
+# analysis_runner's own DEFAULT_PARALLEL_THRESHOLD exactly (no special-
+# casing needed): a new user with enough history to hit this cap gets it
+# split across every worker the machine has, same as any other job this
+# size -- roughly 5 minutes at DEFAULT_WORKERS=8 (100 games / 8 * 30s).
+# Someone with fewer games than this just gets everything they have,
+# uncapped and serial, which is already fast.
+FIRST_RUN_GAME_LIMIT = 100
+
+# Above this many games needing analysis in a single-user job, the progress
+# page offers a choice (keep going in the background / narrow the date
+# range) instead of just grinding through a plain progress bar. Below
+# analysis_runner's own parallel_threshold (100), so most jobs that cross
+# this still run serially -- the choice screen's own estimate accounts for
+# that, and for the cases at or above 100 that don't.
+BIG_UPDATE_THRESHOLD = 12
+
+
 @dataclass
 class JobStatus:
     id: str
@@ -131,6 +154,14 @@ class JobManager:
         with self._lock:
             status = self._jobs.get(job_id)
             return None if status is None else status.to_dict()
+
+    def get_active_job_id(self) -> str | None:
+        """The id of the currently in-flight job, if any -- lets any page's
+        JS discover "is something running right now" without already
+        knowing a job_id (e.g. the sticky progress bar shown on every
+        page)."""
+        with self._lock:
+            return self._active_job_id
 
     def cancel(self, job_id: str) -> bool:
         with self._lock:

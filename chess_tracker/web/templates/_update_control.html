@@ -1,0 +1,11 @@
+{% macro update_control(username, settings) %}
+<form method="post" action="/jobs" style="display:inline-block;margin:0">
+  <input type="hidden" name="user" value="{{ username }}">
+  <input type="hidden" name="email" value="{{ settings.email }}">
+  <input type="hidden" name="depth" value="{{ settings.depth }}">
+  <input type="hidden" name="threads" value="{{ settings.threads }}">
+  <input type="hidden" name="pause" value="{{ settings.pause }}">
+  <input type="hidden" name="min_loss" value="{{ settings.min_loss }}">
+  <button type="submit" class="btn-secondary">Update</button>
+</form>
+{% endmacro %}

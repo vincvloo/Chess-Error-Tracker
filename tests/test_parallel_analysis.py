@@ -281,6 +281,21 @@ def test_run_analysis_stays_serial_below_the_threshold(mock_popen, mock_parallel
 
 @patch("chess_tracker.analysis_runner._run_parallel")
 @patch("chess.engine.SimpleEngine.popen_uci")
+def test_run_analysis_goes_parallel_at_exactly_the_threshold(mock_popen, mock_parallel, tmp_path):
+    # parallel_threshold is inclusive ("N games or more"), not "more than N"
+    # -- exactly N games must still go parallel.
+    mock_popen.return_value = MagicMock()
+    mock_parallel.return_value = (2, [])
+    games = [{"url": f"https://x/g{i}"} for i in range(2)]
+    conn = open_db(str(tmp_path / "t.db"))
+    with patch("chess_tracker.analysis_runner.collect_games", return_value=games):
+        run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,
+                     threads=2, pause=0, quiet=True, parallel_threshold=2, workers=4)
+    mock_parallel.assert_called_once()
+
+
+@patch("chess_tracker.analysis_runner._run_parallel")
+@patch("chess.engine.SimpleEngine.popen_uci")
 def test_run_analysis_goes_parallel_above_the_threshold_with_a_real_db(
         mock_popen, mock_parallel, tmp_path):
     mock_popen.return_value = MagicMock()

@@ -23,11 +23,12 @@ from .db import already_analysed, open_db, save_game
 
 logger = logging.getLogger(__name__)
 
-# Above this many games needing analysis for one user, split the work across
-# --workers processes instead of one engine -- see docs/parallel-analysis-design.md
-# for the full reasoning. Below it, the serial path (today's only behaviour)
-# is unchanged: not worth the process-startup overhead for routine syncs.
-DEFAULT_PARALLEL_THRESHOLD = 200
+# At or above this many games needing analysis for one user, split the work
+# across --workers processes instead of one engine -- see
+# docs/parallel-analysis-design.md for the full reasoning. Below it, the
+# serial path (today's only behaviour) is unchanged: not worth the
+# process-startup overhead for routine syncs.
+DEFAULT_PARALLEL_THRESHOLD = 100
 # Each worker also spends its own `threads` on Stockfish's internal search,
 # so total CPU use is workers * threads -- halving cpu_count() leaves
 # headroom, capped at 8 since returns diminish and per-process engine memory
@@ -244,7 +245,7 @@ def run_analysis(conn: sqlite3.Connection, users: list[str], email: str, engine_
     user's remaining games are skipped and no further users are started --
     everything analysed so far stays saved, same guarantee Ctrl+C gives today.
 
-    When more than `parallel_threshold` games need analysis for a user (and
+    When at least `parallel_threshold` games need analysis for a user (and
     `workers > 1`, and `conn` is backed by a real file, not :memory:), that
     user's backlog is split across `workers` separate processes instead of
     analysed one engine at a time -- see docs/parallel-analysis-design.md.
@@ -275,7 +276,13 @@ def run_analysis(conn: sqlite3.Connection, users: list[str], email: str, engine_
             logger.info(f"[{user}] {len(games)} games known, {len(todo)} need "
                         f"analysis at depth {depth}")
 
-            use_parallel = (workers > 1 and len(todo) > parallel_threshold
+            # Fires before any engine work starts, so a caller (the web
+            # app's JobManager) learns the total almost instantly -- well
+            # before waiting for game 1 to actually finish analysing.
+            if progress_cb is not None:
+                progress_cb(user, 0, len(todo))
+
+            use_parallel = (workers > 1 and len(todo) >= parallel_threshold
                             and db_path is not None)
 
             new = 0

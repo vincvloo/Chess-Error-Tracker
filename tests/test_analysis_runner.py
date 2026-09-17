@@ -63,7 +63,7 @@ def test_run_analysis_calls_progress_cb_per_game(mock_popen):
                      threads=2, pause=0, quiet=True,
                      progress_cb=lambda u, i, t: calls.append((u, i, t)))
 
-    assert calls == [("alice", 1, 2), ("alice", 2, 2)]
+    assert calls == [("alice", 0, 2), ("alice", 1, 2), ("alice", 2, 2)]
 
 
 @patch("chess.engine.SimpleEngine.popen_uci")

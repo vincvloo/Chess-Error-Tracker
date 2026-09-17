@@ -8,6 +8,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from .analysis import PHASES
+from .db import get_settings
 from .reports import (
     CLOCK_BUCKET_LABELS,
     CLOCK_BUCKET_SQL_CASE,
@@ -89,7 +90,7 @@ def build_dashboard_data(conn: sqlite3.Connection, users: list[str]) -> dict:
                 "users": [], "timeClasses": [], "phases": phases,
                 "severities": list(SEVERITIES), "categories": [],
                 "colours": list(COLOURS), "ecos": [], "months": [],
-                "clockBuckets": list(CLOCK_BUCKET_LABELS),
+                "clockBuckets": list(CLOCK_BUCKET_LABELS), "userMeta": {},
             },
             "movesFacts": _fact_table(["user", "tc", "phase", "month"], ["moves"], []),
             "gamesFacts": _fact_table(["user", "tc", "month"],
@@ -273,12 +274,23 @@ def build_dashboard_data(conn: sqlite3.Connection, users: list[str]) -> dict:
             "first": r["first_date"], "last": r["last_date"],
         }
 
+    # Per-user freshness: when this player's data was actually last analysed
+    # (games.analysed_at, set on every save_game()), not when this page
+    # happened to be rendered -- see html_export.py's own __GENERATED_AT__,
+    # which answers a different question.
+    updated_rows = conn.execute(f"""
+        SELECT username, MAX(analysed_at) AS last_updated
+        FROM games WHERE username IN ({placeholders})
+        GROUP BY username
+    """, users).fetchall()
+    user_meta = {r["username"]: {"lastUpdated": r["last_updated"]} for r in updated_rows}
+
     return {
         "lists": {
             "users": present, "timeClasses": time_classes, "phases": phases,
             "severities": list(SEVERITIES), "categories": categories,
             "colours": list(COLOURS), "ecos": ecos, "months": months,
-            "clockBuckets": list(CLOCK_BUCKET_LABELS),
+            "clockBuckets": list(CLOCK_BUCKET_LABELS), "userMeta": user_meta,
         },
         "movesFacts": _fact_table(["user", "tc", "phase", "month"], ["moves"], moves_data),
         "gamesFacts": _fact_table(["user", "tc", "month"],
@@ -317,6 +329,17 @@ def render_dashboard_html(conn: sqlite3.Connection, users: list[str]) -> tuple[s
     data = build_dashboard_data(conn, users)
     if not data["lists"]["users"]:
         return None
+
+    # Only the live web app's Update button (client-side JS in
+    # dashboard_template.html) needs these -- a --export-html file opened
+    # with no server has nowhere to send the form anyway (guarded by the
+    # same location.protocol check as the "Home" link).
+    settings = get_settings(conn)
+    data["meta"]["settings"] = {
+        "email": settings["email"], "depth": settings["depth"],
+        "threads": settings["threads"], "pause": settings["pause"],
+        "min_loss": settings["min_loss"],
+    }
 
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     with open(TEMPLATE_PATH, encoding="utf-8") as f:

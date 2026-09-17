@@ -3,7 +3,7 @@
 {% block content %}
 <div class="backnav"><a href="/">&larr; Home</a></div>
 {% if needs_email %}
-<div class="error">An email is required by Chess.com before fetching games. Set it below, then try Analyse again.</div>
+<div class="error">An email is required by Chess.com before fetching games. Set it below, then try Update again.</div>
 {% endif %}
 {% if saved %}
 <div class="panel" style="background:var(--accent-soft);border-color:var(--accent)">Saved.</div>
@@ -11,7 +11,7 @@
 
 <div class="panel">
   <h2>Parameters</h2>
-  <p class="muted">Used by Analyse and Analyse-more-players on the home page, so you don't have to
+  <p class="muted">Used by Update on the home page and dashboard, so you don't have to
     re-enter them every time.</p>
   <form method="post" action="/settings">
     <label>Contact email (required by Chess.com)</label>
