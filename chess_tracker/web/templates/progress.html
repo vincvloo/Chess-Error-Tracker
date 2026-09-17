@@ -23,7 +23,7 @@
       Narrow the date range instead</button>
   </div>
   <form method="post" action="/jobs" id="narrowForm" style="display:none;margin-top:12px">
-    <input type="hidden" name="user" value="{{ users[0] if users else '' }}">
+    <input type="hidden" name="user" value="{{ users|join(',') }}">
     <input type="hidden" name="email" value="{{ settings.email }}">
     <input type="hidden" name="depth" value="{{ settings.depth }}">
     <input type="hidden" name="threads" value="{{ settings.threads }}">
@@ -45,16 +45,31 @@
 const jobId = {{ job_id|tojson }};
 const bigUpdateThreshold = {{ big_update_threshold }};
 const jobUsers = {{ users|tojson }};
-const isSingleUser = jobUsers.length === 1;
-const density = {{ density|tojson }};
+const jobDepth = {{ settings.depth }};
 // A rough, fixed estimate (matches the ~5-minutes-for-10-games reasoning
 // behind FIRST_RUN_GAME_LIMIT/BIG_UPDATE_THRESHOLD) -- not measured from
 // this run, just enough to give a ballpark before it starts.
 const SECONDS_PER_GAME = 30;
 let bigUpdateShown = false;
+let density = [];
+// Cumulative[i] = games from month i (inclusive) through today -- what
+// "only fetch games since months[i]" would actually mean size-wise.
+let cumulative = [];
 
 function dashboardUrl() {
   return "/dashboard?users=" + encodeURIComponent(jobUsers.join(","));
+}
+
+function formatDuration(totalMinutes) {
+  if (totalMinutes < 60) return totalMinutes + " minute" + (totalMinutes === 1 ? "" : "s");
+  const hours = totalMinutes / 60;
+  if (hours < 24) {
+    const h = hours >= 10 ? Math.round(hours) : Math.round(hours * 10) / 10;
+    return h + " hour" + (h === 1 ? "" : "s");
+  }
+  const days = hours / 24;
+  const d = days >= 10 ? Math.round(days) : Math.round(days * 10) / 10;
+  return d + " day" + (d === 1 ? "" : "s");
 }
 
 const statusText = document.getElementById("status-text");
@@ -69,10 +84,40 @@ const sinceSlider = document.getElementById("sinceSlider");
 const sinceLabel = document.getElementById("sinceLabel");
 const narrowSubmitBtn = document.getElementById("narrowSubmitBtn");
 
-// Cumulative[i] = games from month i (inclusive) through today -- what
-// "only fetch games since months[i]" would actually mean size-wise.
-let cumulative = [];
-if (density.length) {
+// A multi-user (e.g. "compare") job processes one user at a time, so
+// whoever is oversized isn't known until the job is already running --
+// fetched on demand rather than baked into the page at load.
+async function showBigUpdatePanel(currentUser, currentTotal) {
+  bigUpdateShown = true;
+  document.getElementById("bigUpdateNote").textContent = jobUsers.length > 1
+    ? currentUser + " needs " + currentTotal + " games analysed — that could take a while. " +
+      "Narrowing the date range below applies to this whole update, all " + jobUsers.length +
+      " players, not just " + currentUser + "."
+    : currentTotal + " games need analysis — that could take a while.";
+  bigUpdatePanel.style.display = "";
+
+  try {
+    const r = await fetch("/api/users/" + encodeURIComponent(currentUser) +
+      "/density?depth=" + jobDepth);
+    density = (await r.json()).density || [];
+  } catch (e) {
+    density = [];
+  }
+  buildDensityPicker();
+}
+
+function buildDensityPicker() {
+  densityBars.innerHTML = "";
+  if (!density.length) {
+    densityBars.style.display = "none";
+    sinceSlider.style.display = "none";
+    sinceLabel.textContent = "Couldn't load a game-count breakdown -- " +
+      "Start narrower update with this cleared will fetch everything.";
+    return;
+  }
+  densityBars.style.display = "flex";
+  sinceSlider.style.display = "";
+
   cumulative = new Array(density.length);
   let running = 0;
   for (let i = density.length - 1; i >= 0; i--) {
@@ -99,11 +144,6 @@ if (density.length) {
   }
   sinceSlider.value = defaultIndex;
   updateSinceLabel();
-} else {
-  densityBars.style.display = "none";
-  sinceSlider.style.display = "none";
-  sinceLabel.textContent = "Couldn't load a game-count breakdown for this range -- " +
-    "Start narrower update with this cleared will fetch everything.";
 }
 
 function updateSinceLabel() {
@@ -114,7 +154,7 @@ function updateSinceLabel() {
   const minutes = Math.max(1, Math.round(games * SECONDS_PER_GAME / 60));
   sinceInput.value = month;
   sinceLabel.textContent = month + " → today: ~" + games + " game" + (games === 1 ? "" : "s") +
-    ", about " + minutes + " minute" + (minutes === 1 ? "" : "s");
+    ", about " + formatDuration(minutes);
   Array.from(densityBars.children).forEach((el, idx) => {
     el.style.background = idx >= i ? "var(--accent)" : "var(--border)";
   });
@@ -169,11 +209,8 @@ async function poll() {
       ? `[${s.current_user}] analysed ${s.current_index}/${s.current_total}`
       : "Starting...";
 
-    if (!bigUpdateShown && isSingleUser && s.current_total > bigUpdateThreshold) {
-      bigUpdateShown = true;
-      document.getElementById("bigUpdateNote").textContent =
-        s.current_total + " games need analysis — that could take a while.";
-      bigUpdatePanel.style.display = "";
+    if (!bigUpdateShown && s.current_user && s.current_total > bigUpdateThreshold) {
+      showBigUpdatePanel(s.current_user, s.current_total);
     }
 
     setTimeout(poll, 1000);

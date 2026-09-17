@@ -67,6 +67,62 @@ def job_status(request: Request, job_id: str):
     return status
 
 
+def _month_range(start_month: str, end_month: str) -> list[str]:
+    """Every "YYYY-MM" from start through end inclusive, so a quiet stretch
+    with no archive row (Chess.com's monthly listing only includes months
+    that have games) still shows up as real zero-height months instead of
+    just vanishing from the picker."""
+    y, m = int(start_month[:4]), int(start_month[5:7])
+    ey, em = int(end_month[:4]), int(end_month[5:7])
+    months = []
+    while (y, m) <= (ey, em):
+        months.append(f"{y:04d}-{m:02d}")
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+    return months
+
+
+@router.get("/users/{username}/density")
+def user_game_density(request: Request, username: str, depth: int = 14):
+    """Games still needing analysis per month, for one tracked player, for
+    the big-update interstitial's date-range picker (progress.html). Fetched
+    on demand (rather than baked into the progress page) because a
+    multi-user job processes one user at a time, and whichever user the
+    picker ends up being offered for isn't known until the job is already
+    running.
+
+    Per month: archived game count minus how many of that month's games are
+    already in the local database at >= `depth` (db.already_analysed()'s own
+    rule) -- not the raw archive count, which is every game ever played,
+    most of which are typically already analysed. Both halves are plain
+    local reads (`archives`, `games`), no network call, regardless of when
+    this is asked."""
+    username = username.strip().lower()
+    conn = open_db(request.app.state.db_path)
+    try:
+        rows = conn.execute("""
+            SELECT a.month AS month, a.game_count AS total, COALESCE(g.analysed, 0) AS analysed
+            FROM archives a
+            LEFT JOIN (
+                SELECT substr(date, 1, 7) AS month, COUNT(*) AS analysed
+                FROM games WHERE username = ? AND depth >= ?
+                GROUP BY month
+            ) g ON g.month = a.month
+            WHERE a.username = ? AND a.month IS NOT NULL
+        """, (username, depth, username)).fetchall()
+    finally:
+        conn.close()
+
+    todo_by_month = {r["month"]: max(0, (r["total"] or 0) - r["analysed"]) for r in rows}
+    if not todo_by_month:
+        return {"density": []}
+
+    today_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    months = _month_range(min(todo_by_month), max(max(todo_by_month), today_month))
+    return {"density": [{"month": m, "games": todo_by_month.get(m, 0)} for m in months]}
+
+
 @router.post("/jobs/{job_id}/cancel")
 def cancel_job(request: Request, job_id: str):
     ok = request.app.state.jobs.cancel(job_id)

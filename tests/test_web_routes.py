@@ -1,5 +1,6 @@
 import threading
 import time
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import chess
@@ -676,34 +677,60 @@ def test_job_progress_page_includes_big_update_threshold_and_settings(tmp_path, 
     assert 'name="since"' in r.text
 
 
-def test_job_progress_page_includes_game_density_for_a_single_user_job(tmp_path, monkeypatch):
+def test_user_density_endpoint_returns_todo_counts_and_fills_gap_months(tmp_path):
     db_path = _seeded_db(tmp_path)
     conn = open_db(db_path)
     conn.execute("INSERT INTO archives (url, username, month, game_count, complete) "
                  "VALUES (?, ?, ?, ?, 1)", ("https://x/archive1", "alice", "2026-06", 5))
+    # 2026-07 deliberately has no archive row -- a quiet month Chess.com's
+    # own monthly listing skips -- to prove it still shows up as a real
+    # zero-games month rather than just being absent from the picker.
     conn.execute("INSERT INTO archives (url, username, month, game_count, complete) "
-                 "VALUES (?, ?, ?, ?, 1)", ("https://x/archive2", "alice", "2026-07", 3))
+                 "VALUES (?, ?, ?, ?, 1)", ("https://x/archive2", "alice", "2026-08", 3))
+    # Two of 2026-06's 5 archived games are already analysed at depth 14 --
+    # only the remaining 3 should count as still needing analysis.
+    conn.execute("""INSERT INTO games (url, username, date, depth)
+                    VALUES ('https://x/a1', 'alice', '2026-06-05', 14),
+                           ('https://x/a2', 'alice', '2026-06-10', 14)""")
     conn.commit()
     conn.close()
 
-    app = create_app(db_path, engine_path=_fake_engine_path(tmp_path))
-    monkeypatch.setattr(app.state.jobs, "get_status",
-                        lambda job_id: {"users": ["alice"], "state": "running"})
-    client = TestClient(app)
-    r = client.get("/jobs/whatever")
+    client = TestClient(create_app(db_path))
+    r = client.get("/api/users/alice/density?depth=14")
     assert r.status_code == 200
-    assert '"2026-06"' in r.text
-    assert '"2026-07"' in r.text
+    density = {d["month"]: d["games"] for d in r.json()["density"]}
+    assert density["2026-06"] == 3  # 5 archived, 2 already in the local db
+    assert density["2026-07"] == 0  # gap month, filled in rather than missing
+    assert density["2026-08"] == 3  # none of these analysed yet
+    today_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    assert today_month in density  # the range always reaches the current month
 
 
-def test_job_progress_page_has_no_density_for_a_multi_user_job(tmp_path, monkeypatch):
-    app = create_app(_seeded_db(tmp_path), engine_path=_fake_engine_path(tmp_path))
-    monkeypatch.setattr(app.state.jobs, "get_status",
-                        lambda job_id: {"users": ["alice", "bob"], "state": "running"})
-    client = TestClient(app)
-    r = client.get("/jobs/whatever")
+def test_user_density_endpoint_deeper_reanalysis_counts_everything_as_todo(tmp_path):
+    # A game analysed at a shallower depth than requested doesn't count as
+    # "already analysed" (db.already_analysed()'s own rule) -- so it must
+    # still show up as needing (re-)analysis.
+    db_path = _seeded_db(tmp_path)
+    conn = open_db(db_path)
+    conn.execute("INSERT INTO archives (url, username, month, game_count, complete) "
+                 "VALUES (?, ?, ?, ?, 1)", ("https://x/archive1", "alice", "2026-06", 2))
+    conn.execute("""INSERT INTO games (url, username, date, depth)
+                    VALUES ('https://x/a1', 'alice', '2026-06-05', 10)""")
+    conn.commit()
+    conn.close()
+
+    client = TestClient(create_app(db_path))
+    r = client.get("/api/users/alice/density?depth=14")
     assert r.status_code == 200
-    assert "const density = [];" in r.text
+    density = {d["month"]: d["games"] for d in r.json()["density"]}
+    assert density["2026-06"] == 2
+
+
+def test_user_density_endpoint_empty_for_unknown_user(tmp_path):
+    client = TestClient(create_app(_seeded_db(tmp_path)))
+    r = client.get("/api/users/nosuchuser/density")
+    assert r.status_code == 200
+    assert r.json() == {"density": []}
 
 
 def test_job_progress_page_data_link_points_at_the_jobs_own_users(tmp_path, monkeypatch):
