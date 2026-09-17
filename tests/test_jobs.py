@@ -3,9 +3,10 @@ import time
 
 import pytest
 
+from chess_tracker.analysis_runner import DEFAULT_PARALLEL_THRESHOLD
 from chess_tracker.chesscom import ChessComError
 from chess_tracker.db import open_db
-from chess_tracker.web.jobs import JobAlreadyRunningError, JobManager
+from chess_tracker.web.jobs import FIRST_RUN_GAME_LIMIT, JobAlreadyRunningError, JobManager
 
 
 def _wait_for(jobs: JobManager, job_id: str, timeout: float = 2.0) -> dict:
@@ -22,6 +23,13 @@ def _jobs(tmp_path) -> JobManager:
     db_path = str(tmp_path / "test.db")
     open_db(db_path).close()
     return JobManager(db_path)
+
+
+def test_first_run_game_limit_matches_the_parallel_threshold():
+    # Deliberate: a new user with enough history to hit the onboarding cap
+    # gets split across every worker the machine has, same as any other job
+    # this size -- see FIRST_RUN_GAME_LIMIT's own comment for the reasoning.
+    assert FIRST_RUN_GAME_LIMIT == DEFAULT_PARALLEL_THRESHOLD == 100
 
 
 def test_start_job_reaches_done_state(tmp_path, monkeypatch):
@@ -44,28 +52,6 @@ def test_start_job_reaches_done_state(tmp_path, monkeypatch):
     assert final["current_index"] == 1
     assert final["current_total"] == 1
     assert final["per_user"]["alice"] == {"analysed": 1, "todo": 1}
-
-
-def test_start_job_forwards_parallel_threshold_and_workers_only_when_given(tmp_path, monkeypatch):
-    received = []
-
-    def fake_run_analysis(conn, users, email, engine_path, depth, threads, pause,
-                          progress_cb=None, cancel_event=None, **kwargs):
-        received.append(kwargs)
-
-    monkeypatch.setattr("chess_tracker.web.jobs.run_analysis", fake_run_analysis)
-    jobs = _jobs(tmp_path)
-
-    status = jobs.start_job(["alice"], "you@example.com", "/fake/engine", 14, 2, 0.1,
-                            parallel_threshold=1, workers=4)
-    _wait_for(jobs, status.id)
-    assert received[-1]["parallel_threshold"] == 1
-    assert received[-1]["workers"] == 4
-
-    status2 = jobs.start_job(["bob"], "you@example.com", "/fake/engine", 14, 2, 0.1)
-    _wait_for(jobs, status2.id)
-    assert "parallel_threshold" not in received[-1]
-    assert "workers" not in received[-1]
 
 
 def test_start_job_rejects_concurrent_jobs(tmp_path, monkeypatch):

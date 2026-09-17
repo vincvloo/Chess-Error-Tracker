@@ -59,7 +59,7 @@ const PARALLEL_THRESHOLD = {{ parallel_threshold }};
 const PARALLEL_WORKERS = {{ workers }};
 
 function estimateSecondsFor(games) {
-  const rate = games > PARALLEL_THRESHOLD ? PARALLEL_WORKERS : 1;
+  const rate = games >= PARALLEL_THRESHOLD ? PARALLEL_WORKERS : 1;
   return Math.ceil(games * SECONDS_PER_GAME / rate);
 }
 
