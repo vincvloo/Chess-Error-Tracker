@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from ..analysis import INACCURACY
-from ..analysis_runner import run_analysis
+from ..analysis_runner import DEFAULT_WORKERS, run_analysis
 from ..chesscom import ChessComError
 from ..db import open_db
 
@@ -30,14 +30,34 @@ class JobAlreadyRunningError(Exception):
     """Raised by start_job() when a job is already in flight."""
 
 
-# Caps the very first analysis run so onboarding doesn't leave someone
-# staring at a progress bar through their whole game history -- roughly 5
-# minutes at the default depth/settings (see analysis_runner's 20-40s/game).
-FIRST_RUN_GAME_LIMIT = 10
+# The estimate every "how long will this take" figure in the app is built
+# from -- see analysis_runner's own 20-40s/game note; 30 sits in the middle.
+SECONDS_PER_GAME = 30
+
+# Games per ~5 minutes at SECONDS_PER_GAME, scaled by however many parallel
+# workers this machine actually gets (analysis_runner.DEFAULT_WORKERS,
+# computed once from os.cpu_count() at import time) -- caps the very first
+# analysis run so onboarding doesn't leave someone staring at a progress bar
+# through their whole game history. The onboarding job also passes a low
+# parallel_threshold override (see routes_pages.py) so a batch this size
+# actually gets split across workers instead of running serially, which
+# below analysis_runner's normal 200-game default it otherwise wouldn't.
+FIRST_RUN_GAME_LIMIT = (300 // SECONDS_PER_GAME) * DEFAULT_WORKERS
+
+# Passed as the onboarding job's own parallel_threshold (see routes_pages.py),
+# so FIRST_RUN_GAME_LIMIT's worker-scaled sizing is actually realised instead
+# of running serially below analysis_runner's normal 200-game default. 1
+# rather than 0: parallel mode still requires more than the threshold, and a
+# single game is never worth splitting across processes anyway.
+FIRST_RUN_PARALLEL_THRESHOLD = 1
 
 # Above this many games needing analysis in a single-user job, the progress
 # page offers a choice (keep going in the background / narrow the date
-# range) instead of just grinding through a plain progress bar.
+# range) instead of just grinding through a plain progress bar. Deliberately
+# NOT scaled by DEFAULT_WORKERS like FIRST_RUN_GAME_LIMIT: an ordinary
+# update doesn't override analysis_runner's parallel_threshold (200), so
+# below that a job this size still runs serially regardless of how many
+# workers the machine could otherwise support.
 BIG_UPDATE_THRESHOLD = 12
 
 
@@ -77,7 +97,8 @@ class JobManager:
     def start_job(self, users: list[str], email: str, engine_path: str, depth: int,
                   threads: int, pause: float, *, since: str | None = None,
                   time_class: str | None = None, limit: int | None = None,
-                  min_loss: int = INACCURACY) -> JobStatus:
+                  min_loss: int = INACCURACY, parallel_threshold: int | None = None,
+                  workers: int | None = None) -> JobStatus:
         with self._lock:
             if self._active_job_id is not None:
                 raise JobAlreadyRunningError(
@@ -91,11 +112,20 @@ class JobManager:
             cancel_event = threading.Event()
             self._cancel_events[job_id] = cancel_event
 
+        run_kwargs = dict(since=since, time_class=time_class, limit=limit, min_loss=min_loss)
+        # Only overridden when the caller asks (the onboarding job does, to
+        # force a small first batch across workers instead of running it
+        # serially) -- omitted otherwise so run_analysis keeps its own
+        # normal defaults for every other job.
+        if parallel_threshold is not None:
+            run_kwargs["parallel_threshold"] = parallel_threshold
+        if workers is not None:
+            run_kwargs["workers"] = workers
+
         thread = threading.Thread(
             target=self._run, name=f"chess-tracker-job-{job_id}",
             args=(job_id, users, email, engine_path, depth, threads, pause, cancel_event),
-            kwargs=dict(since=since, time_class=time_class, limit=limit, min_loss=min_loss),
-            daemon=True)
+            kwargs=run_kwargs, daemon=True)
         thread.start()
         return status
 

@@ -6,9 +6,11 @@ from unittest.mock import MagicMock
 import chess
 from fastapi.testclient import TestClient
 
+from chess_tracker.analysis_runner import DEFAULT_PARALLEL_THRESHOLD, DEFAULT_WORKERS
 from chess_tracker.db import get_settings, open_db, save_game, set_settings
 from chess_tracker.web.app import create_app
-from chess_tracker.web.jobs import BIG_UPDATE_THRESHOLD, FIRST_RUN_GAME_LIMIT, JobAlreadyRunningError
+from chess_tracker.web.jobs import (BIG_UPDATE_THRESHOLD, FIRST_RUN_GAME_LIMIT,
+                                    FIRST_RUN_PARALLEL_THRESHOLD, JobAlreadyRunningError)
 
 REC = {
     "url": "https://example.com/g1", "username": "alice", "end_time": 1000,
@@ -475,6 +477,10 @@ def test_onboarding_new_username_starts_capped_job_and_redirects_to_demo_dashboa
     assert r.headers["location"] == "/demo-dashboard?job=fake-job-id"
     assert calls["users"] == ["newplayer"]
     assert calls["kwargs"]["limit"] == FIRST_RUN_GAME_LIMIT
+    # forces the capped first batch across workers instead of running it
+    # serially, which below analysis_runner's normal 200-game default it
+    # otherwise wouldn't -- see jobs.FIRST_RUN_PARALLEL_THRESHOLD.
+    assert calls["kwargs"]["parallel_threshold"] == FIRST_RUN_PARALLEL_THRESHOLD
 
 
 def test_onboarding_missing_email_redirects_to_settings(tmp_path):
@@ -675,6 +681,8 @@ def test_job_progress_page_includes_big_update_threshold_and_settings(tmp_path, 
     assert r.status_code == 200
     assert str(BIG_UPDATE_THRESHOLD) in r.text
     assert 'name="since"' in r.text
+    assert "const PARALLEL_THRESHOLD = " + str(DEFAULT_PARALLEL_THRESHOLD) in r.text
+    assert "const PARALLEL_WORKERS = " + str(DEFAULT_WORKERS) in r.text
 
 
 def test_user_density_endpoint_returns_todo_counts_and_fills_gap_months(tmp_path):

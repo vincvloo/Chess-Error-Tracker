@@ -46,6 +46,28 @@ def test_start_job_reaches_done_state(tmp_path, monkeypatch):
     assert final["per_user"]["alice"] == {"analysed": 1, "todo": 1}
 
 
+def test_start_job_forwards_parallel_threshold_and_workers_only_when_given(tmp_path, monkeypatch):
+    received = []
+
+    def fake_run_analysis(conn, users, email, engine_path, depth, threads, pause,
+                          progress_cb=None, cancel_event=None, **kwargs):
+        received.append(kwargs)
+
+    monkeypatch.setattr("chess_tracker.web.jobs.run_analysis", fake_run_analysis)
+    jobs = _jobs(tmp_path)
+
+    status = jobs.start_job(["alice"], "you@example.com", "/fake/engine", 14, 2, 0.1,
+                            parallel_threshold=1, workers=4)
+    _wait_for(jobs, status.id)
+    assert received[-1]["parallel_threshold"] == 1
+    assert received[-1]["workers"] == 4
+
+    status2 = jobs.start_job(["bob"], "you@example.com", "/fake/engine", 14, 2, 0.1)
+    _wait_for(jobs, status2.id)
+    assert "parallel_threshold" not in received[-1]
+    assert "workers" not in received[-1]
+
+
 def test_start_job_rejects_concurrent_jobs(tmp_path, monkeypatch):
     started = threading.Event()
     release = threading.Event()

@@ -11,12 +11,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from ..analysis import INACCURACY
+from ..analysis_runner import DEFAULT_PARALLEL_THRESHOLD, DEFAULT_WORKERS
 from ..db import get_settings, open_db, set_settings
 from ..engine import ENGINE_HELP, find_engine
 from ..html_export import render_dashboard_html
 from ..reports import practice_pool, practice_queue, practice_stats, report_model, user_summaries
 from .demo_data import render_demo_dashboard_html
-from .jobs import BIG_UPDATE_THRESHOLD, FIRST_RUN_GAME_LIMIT, JobAlreadyRunningError
+from .jobs import (BIG_UPDATE_THRESHOLD, FIRST_RUN_GAME_LIMIT, FIRST_RUN_PARALLEL_THRESHOLD,
+                   SECONDS_PER_GAME, JobAlreadyRunningError)
 
 router = APIRouter()
 TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
@@ -88,7 +90,8 @@ def set_primary_user(request: Request, username: str = Form(...),
             status = request.app.state.jobs.start_job(
                 [username], settings["email"], engine_path,
                 settings["depth"], settings["threads"], settings["pause"],
-                min_loss=settings["min_loss"], limit=FIRST_RUN_GAME_LIMIT)
+                min_loss=settings["min_loss"], limit=FIRST_RUN_GAME_LIMIT,
+                parallel_threshold=FIRST_RUN_PARALLEL_THRESHOLD)
             return RedirectResponse(f"/demo-dashboard?job={status.id}", status_code=303)
         except JobAlreadyRunningError as exc:
             return _job_error(request, str(exc), 409)
@@ -183,8 +186,10 @@ def job_progress_page(request: Request, job_id: str):
     finally:
         conn.close()
     return templates.TemplateResponse(request, "progress.html", {
-        "job_id": job_id, "users": status["users"],
-        "settings": settings, "big_update_threshold": BIG_UPDATE_THRESHOLD,
+        "job_id": job_id, "users": status["users"], "settings": settings,
+        "big_update_threshold": BIG_UPDATE_THRESHOLD,
+        "seconds_per_game": SECONDS_PER_GAME,
+        "parallel_threshold": DEFAULT_PARALLEL_THRESHOLD, "workers": DEFAULT_WORKERS,
     })
 
 

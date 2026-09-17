@@ -46,10 +46,23 @@ const jobId = {{ job_id|tojson }};
 const bigUpdateThreshold = {{ big_update_threshold }};
 const jobUsers = {{ users|tojson }};
 const jobDepth = {{ settings.depth }};
-// A rough, fixed estimate (matches the ~5-minutes-for-10-games reasoning
-// behind FIRST_RUN_GAME_LIMIT/BIG_UPDATE_THRESHOLD) -- not measured from
-// this run, just enough to give a ballpark before it starts.
-const SECONDS_PER_GAME = 30;
+// A rough, fixed estimate (matches the reasoning behind FIRST_RUN_GAME_LIMIT/
+// BIG_UPDATE_THRESHOLD) -- used only before this job has produced any real
+// progress to measure a rate from; see estimateRemainingSeconds() below for
+// the live version once it has.
+const SECONDS_PER_GAME = {{ seconds_per_game }};
+// A batch above this size splits across PARALLEL_WORKERS processes instead
+// of running one game at a time -- matches analysis_runner's own
+// parallel_threshold/workers for a plain (non-onboarding) job, which is
+// what narrowing the date range here would actually start.
+const PARALLEL_THRESHOLD = {{ parallel_threshold }};
+const PARALLEL_WORKERS = {{ workers }};
+
+function estimateSecondsFor(games) {
+  const rate = games > PARALLEL_THRESHOLD ? PARALLEL_WORKERS : 1;
+  return Math.ceil(games * SECONDS_PER_GAME / rate);
+}
+
 let bigUpdateShown = false;
 let density = [];
 // Cumulative[i] = games from month i (inclusive) through today -- what
@@ -89,11 +102,12 @@ const narrowSubmitBtn = document.getElementById("narrowSubmitBtn");
 // fetched on demand rather than baked into the page at load.
 async function showBigUpdatePanel(currentUser, currentTotal) {
   bigUpdateShown = true;
+  const estimate = formatDuration(Math.max(1, Math.round(estimateSecondsFor(currentTotal) / 60)));
   document.getElementById("bigUpdateNote").textContent = jobUsers.length > 1
-    ? currentUser + " needs " + currentTotal + " games analysed — that could take a while. " +
-      "Narrowing the date range below applies to this whole update, all " + jobUsers.length +
+    ? currentUser + " needs " + currentTotal + " games analysed — about " + estimate +
+      ". Narrowing the date range below applies to this whole update, all " + jobUsers.length +
       " players, not just " + currentUser + "."
-    : currentTotal + " games need analysis — that could take a while.";
+    : currentTotal + " games need analysis — about " + estimate + ".";
   bigUpdatePanel.style.display = "";
 
   try {
@@ -151,7 +165,7 @@ function updateSinceLabel() {
   const i = parseInt(sinceSlider.value, 10);
   const month = density[i].month;
   const games = cumulative[i];
-  const minutes = Math.max(1, Math.round(games * SECONDS_PER_GAME / 60));
+  const minutes = Math.max(1, Math.round(estimateSecondsFor(games) / 60));
   sinceInput.value = month;
   sinceLabel.textContent = month + " → today: ~" + games + " game" + (games === 1 ? "" : "s") +
     ", about " + formatDuration(minutes);
@@ -198,6 +212,21 @@ function dashboardLink(users) {
   return `<a class="button-link" href="/dashboard?users=${q}">View dashboard</a>`;
 }
 
+// Prefers this run's own measured rate (self-correcting for whatever's
+// actually happening -- serial or parallel -- rather than guessing which
+// regime applies) once it has analysed at least one game; falls back to
+// the pre-start model for the brief window before that.
+function estimateRemainingLabel(s) {
+  const remaining = s.current_total - s.current_index;
+  if (remaining <= 0) return null;
+  const startedMs = s.started_at ? Date.parse(s.started_at) : NaN;
+  const elapsedSec = Number.isNaN(startedMs) ? 0 : (Date.now() - startedMs) / 1000;
+  const seconds = (s.current_index > 0 && elapsedSec > 0)
+    ? remaining / (s.current_index / elapsedSec)
+    : estimateSecondsFor(remaining);
+  return formatDuration(Math.max(1, Math.round(seconds / 60)));
+}
+
 async function poll() {
   const r = await fetch(`/api/jobs/${jobId}`);
   const s = await r.json();
@@ -205,8 +234,10 @@ async function poll() {
   if (s.state === "running" || s.state === "queued") {
     const pct = s.current_total ? Math.round(s.current_index / s.current_total * 100) : 0;
     bar.style.width = pct + "%";
+    const eta = s.current_user ? estimateRemainingLabel(s) : null;
     statusText.textContent = s.current_user
-      ? `[${s.current_user}] analysed ${s.current_index}/${s.current_total}`
+      ? `[${s.current_user}] analysed ${s.current_index}/${s.current_total}` +
+        (eta ? ` — about ${eta} left` : "")
       : "Starting...";
 
     if (!bigUpdateShown && s.current_user && s.current_total > bigUpdateThreshold) {

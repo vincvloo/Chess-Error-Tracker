@@ -114,6 +114,28 @@ a.button-link { display: inline-block; margin-top: 4px; font-size: 12.5px; color
     bar.classList.remove("show");
   }
 
+  function shortDuration(totalMinutes) {
+    if (totalMinutes < 60) return Math.max(1, totalMinutes) + "m";
+    var hours = totalMinutes / 60;
+    if (hours < 24) return (hours >= 10 ? Math.round(hours) : Math.round(hours * 10) / 10) + "h";
+    var days = hours / 24;
+    return (days >= 10 ? Math.round(days) : Math.round(days * 10) / 10) + "d";
+  }
+
+  // Prefers this run's own measured rate (self-correcting for serial vs.
+  // parallel, rather than guessing which applies) once it has analysed at
+  // least one game; a plain per-game guess before that.
+  function estimateRemaining(s) {
+    var remaining = s.current_total - s.current_index;
+    if (remaining <= 0) return null;
+    var startedMs = s.started_at ? Date.parse(s.started_at) : NaN;
+    var elapsedSec = isNaN(startedMs) ? 0 : (Date.now() - startedMs) / 1000;
+    var seconds = (s.current_index > 0 && elapsedSec > 0)
+      ? remaining / (s.current_index / elapsedSec)
+      : remaining * 30;
+    return shortDuration(Math.round(seconds / 60));
+  }
+
   async function pollJob() {
     if (!currentJobId) return;
     let s;
@@ -126,7 +148,12 @@ a.button-link { display: inline-block; margin-top: 4px; font-size: 12.5px; color
       var p = s.current_total ? Math.round(s.current_index / s.current_total * 100) : 0;
       fill.style.width = p + "%";
       pct.textContent = p + "%";
-      label.textContent = s.current_user ? "Updating " + s.current_user : "Starting…";
+      if (s.current_user) {
+        var eta = estimateRemaining(s);
+        label.textContent = "Updating " + s.current_user + (eta ? " — ~" + eta + " left" : "");
+      } else {
+        label.textContent = "Starting…";
+      }
     } else {
       hideJob();
     }
