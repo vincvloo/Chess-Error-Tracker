@@ -46,6 +46,13 @@
 </div>
 
 {% else %}
+<div class="panel" id="updateBanner" style="display:none">
+  <div class="headerrow">
+    <span id="updateBannerText">A new version of Chess Error Tracker is available.</span>
+    <button type="button" id="updateBtn" class="btn-secondary">Update</button>
+  </div>
+</div>
+
 <div class="panel">
   <div class="headerrow">
     <h2>{{ primary_user }}</h2>
@@ -120,5 +127,25 @@ compareBtn.addEventListener("click", () => {
 });
 </script>
 {% endif %}
+<script>
+fetch("/api/update/check").then(r => r.json()).then(d => {
+  if (d.available) document.getElementById("updateBanner").style.display = "";
+}).catch(() => {});
+
+document.getElementById("updateBtn").addEventListener("click", async () => {
+  const btn = document.getElementById("updateBtn");
+  btn.disabled = true;
+  btn.textContent = "Updating…";
+  const r = await fetch("/api/update/apply", {method: "POST"});
+  const d = await r.json();
+  document.getElementById("updateBannerText").textContent = d.ok
+    ? "Updated! Close and reopen the app to finish."
+    : "Couldn't update: " + d.message;
+  if (!d.ok) {
+    btn.disabled = false;
+    btn.textContent = "Update";
+  }
+});
+</script>
 {% endif %}
 {% endblock %}

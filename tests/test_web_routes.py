@@ -926,3 +926,79 @@ def test_achievements_page_others_column_uses_pooled_mistakes(tmp_path):
     assert page.status_code == 200
     assert "hung a piece" in page.text
     assert "1/2" in page.text  # 1 of bob's 2 mistakes in this category solved by alice
+
+
+# ---- update checker -----------------------------------------------------
+
+def test_update_check_returns_available_true(tmp_path, monkeypatch):
+    monkeypatch.setattr("chess_tracker.web.updater.find_git", lambda: "/usr/bin/git")
+    monkeypatch.setattr("chess_tracker.web.updater.check_for_update",
+                        lambda git_path, repo: {"available": True, "reason": None})
+    client = TestClient(create_app(_seeded_db(tmp_path)))
+    r = client.get("/api/update/check")
+    assert r.status_code == 200
+    assert r.json() == {"available": True}
+
+
+def test_update_check_returns_available_false_when_git_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr("chess_tracker.web.updater.find_git", lambda: None)
+    client = TestClient(create_app(_seeded_db(tmp_path)))
+    r = client.get("/api/update/check")
+    assert r.json() == {"available": False}
+
+
+def test_update_check_is_cached_within_the_ttl(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr("chess_tracker.web.updater.find_git", lambda: "/usr/bin/git")
+
+    def fake_check(git_path, repo):
+        calls.append(1)
+        return {"available": False, "reason": None}
+
+    monkeypatch.setattr("chess_tracker.web.updater.check_for_update", fake_check)
+    client = TestClient(create_app(_seeded_db(tmp_path)))
+    client.get("/api/update/check")
+    client.get("/api/update/check")
+    assert len(calls) == 1
+
+
+def test_home_hub_includes_update_banner_markup(tmp_path):
+    db_path = _seeded_db(tmp_path)
+    conn = open_db(db_path)
+    set_settings(conn, primary_user="alice")
+    conn.close()
+    client = TestClient(create_app(db_path))
+    r = client.get("/")
+    assert r.status_code == 200
+    # Always present, hidden by default -- JS decides visibility from
+    # /api/update/check, so this just confirms the hook point exists.
+    assert 'id="updateBanner"' in r.text
+    assert 'style="display:none"' in r.text
+
+
+def test_update_apply_reports_success(tmp_path, monkeypatch):
+    monkeypatch.setattr("chess_tracker.web.updater.find_git", lambda: "/usr/bin/git")
+    monkeypatch.setattr("chess_tracker.web.updater.apply_update",
+                        lambda git_path, repo: {"ok": True, "message": "Updated!"})
+    client = TestClient(create_app(_seeded_db(tmp_path)))
+    r = client.post("/api/update/apply")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "message": "Updated!"}
+
+
+def test_update_apply_reports_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr("chess_tracker.web.updater.find_git", lambda: "/usr/bin/git")
+    monkeypatch.setattr("chess_tracker.web.updater.apply_update",
+                        lambda git_path, repo: {"ok": False, "message": "local changes present"})
+    client = TestClient(create_app(_seeded_db(tmp_path)))
+    r = client.post("/api/update/apply")
+    assert r.json() == {"ok": False, "message": "local changes present"}
+
+
+def test_update_apply_without_git_reports_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr("chess_tracker.web.updater.find_git", lambda: None)
+    client = TestClient(create_app(_seeded_db(tmp_path)))
+    r = client.post("/api/update/apply")
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+

@@ -11,8 +11,14 @@ from fastapi.responses import JSONResponse
 
 from ..analysis import MISTAKE, score_cp
 from ..db import open_db
+from . import updater
 
 router = APIRouter(prefix="/api")
+
+# How long a "no update available" (or "couldn't check") result is trusted
+# before /api/update/check runs a real `git fetch` again -- avoids a network
+# call on every single home-page load within a session.
+_UPDATE_CHECK_TTL_SECONDS = 600
 
 # Depth for the live engine check on a practice-mode attempt. A plain
 # constant here, not read from config -- this is a quick interactive check,
@@ -257,3 +263,41 @@ def reset_practice_attempts(request: Request, user: str):
     finally:
         conn.close()
     return {"deleted": True}
+
+
+@router.get("/update/check")
+def update_check(request: Request):
+    """Whether a newer commit is available upstream -- powers the quiet
+    banner on the home page. Never surfaces *why* a check came back
+    negative (not a git checkout, no network, etc.): those all collapse to
+    "no update", since none of them are the user's problem to solve."""
+    cache = request.app.state.update_cache
+    now = datetime.now(timezone.utc)
+    if cache["checked_at"] is not None:
+        age = (now - cache["checked_at"]).total_seconds()
+        if age < _UPDATE_CHECK_TTL_SECONDS:
+            return {"available": cache["result"]["available"]}
+
+    git_path = updater.find_git()
+    if git_path is None:
+        result = {"available": False, "reason": "git not found"}
+    else:
+        result = updater.check_for_update(git_path, updater.repo_root())
+    cache["checked_at"] = now
+    cache["result"] = result
+    return {"available": result["available"]}
+
+
+@router.post("/update/apply")
+def update_apply(request: Request):
+    """Runs the actual update -- only reached by clicking the banner's own
+    button, so (unlike /update/check) a real failure message is fine to
+    show."""
+    git_path = updater.find_git()
+    if git_path is None:
+        return {"ok": False, "message": "git wasn't found on this machine."}
+    result = updater.apply_update(git_path, updater.repo_root())
+    # A fresh check next time the banner asks, rather than trusting the
+    # stale cached "yes" through to the next TTL window.
+    request.app.state.update_cache = {"checked_at": None, "result": None}
+    return result

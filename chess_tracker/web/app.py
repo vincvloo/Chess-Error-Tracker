@@ -18,6 +18,9 @@ def create_app(db_path: str, engine_path: str | None = None) -> FastAPI:
     app.state.db_path = db_path
     app.state.engine_path = engine_path
     app.state.jobs = JobManager(db_path)
+    # Populated lazily by the /api/update/check route -- a real git fetch,
+    # so cached rather than re-run on every single home-page load.
+    app.state.update_cache = {"checked_at": None, "result": None}
 
     from . import routes_api, routes_pages
     app.include_router(routes_pages.router)
