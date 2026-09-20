@@ -161,6 +161,31 @@ def _iter_own_moves(game: chess.pgn.Game, me: chess.Color):
         board.push(played)
 
 
+def score_move(board_before: chess.Board, played: chess.Move, me: chess.Color,
+               engine: chess.engine.SimpleEngine, limit: chess.engine.Limit
+               ) -> tuple[int, chess.Move, chess.Move | None, int, int] | None:
+    """
+    cp_loss, the engine's best move, its likely reply, and the raw before/
+    after scores for one of `me`'s moves from `board_before`. None if the
+    engine found no best move at all (only possible in an already-terminal
+    position). Shared by analyse_game() (chess.com PGN games) and
+    analyse_bot_game() (phase 5 play-mode games) so the actual engine-
+    scoring logic exists in exactly one place.
+    """
+    info_before = engine.analyse(board_before, limit)
+    cp_before = score_cp(info_before, me)
+    best = info_before.get("pv", [None])[0]
+    if best is None:
+        return None
+
+    board_after = board_before.copy()
+    board_after.push(played)
+    info_after = engine.analyse(board_after, limit)
+    cp_after = score_cp(info_after, me)
+    reply = info_after.get("pv", [None])[0]
+    return cp_before - cp_after, best, reply, cp_before, cp_after
+
+
 def analyse_game(game_json: dict, user: str, engine: chess.engine.SimpleEngine,
                  depth: int, min_loss: int) -> tuple[GameRecord, list[MistakeRecord]] | None:
     pgn_text = game_json.get("pgn")
@@ -201,20 +226,10 @@ def analyse_game(game_json: dict, user: str, engine: chess.engine.SimpleEngine,
         move_no = board.fullmove_number
         rec[f"{game_phase(board, move_no)}_moves"] += 1
 
-        info_before = engine.analyse(board, limit)
-        cp_before = score_cp(info_before, me)
-        best = info_before.get("pv", [None])[0]
-        if best is None:
+        scored = score_move(board, played, me, engine, limit)
+        if scored is None:
             continue
-
-        board_before = board.copy()
-        board_after = board.copy()
-        board_after.push(played)
-
-        info_after = engine.analyse(board_after, limit)
-        cp_after = score_cp(info_after, me)
-        reply = info_after.get("pv", [None])[0]
-        cp_loss = cp_before - cp_after
+        cp_loss, best, reply, cp_before, cp_after = scored
 
         if cp_loss >= min_loss and played != best:
             mistakes.append({
@@ -222,22 +237,69 @@ def analyse_game(game_json: dict, user: str, engine: chess.engine.SimpleEngine,
                 "end_time": end_time, "time_class": rec["time_class"],
                 "my_rating": rec["my_rating"], "my_colour": rec["my_colour"],
                 "move_number": move_no,
-                "phase": game_phase(board_before, move_no),
+                "phase": game_phase(board, move_no),
                 "severity": ("blunder" if cp_loss >= BLUNDER
                              else "mistake" if cp_loss >= MISTAKE else "inaccuracy"),
                 "cp_loss": min(cp_loss, CP_LOSS_CAP),
-                "category": classify(board_before, played, best, me, reply,
+                "category": classify(board, played, best, me, reply,
                                      cp_before, cp_after),
-                "played": board_before.san(played),
-                "best": board_before.san(best),
+                "played": board.san(played),
+                "best": board.san(best),
                 "clock_seconds": node.clock(),
-                "fen": board_before.fen(),
+                "fen": board.fen(),
             })
 
     if rec["moves_played"] == 0:
         return None  # unparseable or empty movetext, do not pollute the store
 
     return rec, mistakes
+
+
+def _iter_own_moves_from_list(moves: list[chess.Move], me: chess.Color):
+    """Same walk-and-skip-opponent-moves shape as _iter_own_moves(), driven
+    by a plain move list instead of a chess.pgn.Game's mainline -- phase 5
+    play-mode games have no PGN (they're never persisted), just the move
+    list the client already tracked while the game was played."""
+    board = chess.Board()
+    for played in moves:
+        if board.turn == me:
+            yield board, played
+        board.push(played)
+
+
+def analyse_bot_game(moves: list[chess.Move], me: chess.Color,
+                     engine: chess.engine.SimpleEngine, depth: int,
+                     min_loss: int) -> list[dict]:
+    """
+    Same per-move cp_loss/category scoring as analyse_game(), for a phase 5
+    play-mode game instead of a stored chess.com one. No GameRecord wrapper
+    (a bot game has no rating/eco/url/time_class to store) and nothing is
+    written to the database -- bot games stay ephemeral by design (see the
+    phase 5 plan); this is a one-off scoring pass whose result is shown once,
+    on request, not persisted.
+    """
+    limit = chess.engine.Limit(depth=depth)
+    mistakes: list[dict] = []
+    for board, played in _iter_own_moves_from_list(moves, me):
+        move_no = board.fullmove_number
+        scored = score_move(board, played, me, engine, limit)
+        if scored is None:
+            continue
+        cp_loss, best, reply, cp_before, cp_after = scored
+
+        if cp_loss >= min_loss and played != best:
+            mistakes.append({
+                "move_number": move_no,
+                "phase": game_phase(board, move_no),
+                "severity": ("blunder" if cp_loss >= BLUNDER
+                             else "mistake" if cp_loss >= MISTAKE else "inaccuracy"),
+                "cp_loss": min(cp_loss, CP_LOSS_CAP),
+                "category": classify(board, played, best, me, reply, cp_before, cp_after),
+                "played": board.san(played),
+                "best": board.san(best),
+                "fen": board.fen(),
+            })
+    return mistakes
 
 
 def count_phase_moves(game_json: dict, user: str) -> dict[str, int] | None:

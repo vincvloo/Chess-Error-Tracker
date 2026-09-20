@@ -277,6 +277,54 @@ def practice_pool(conn: sqlite3.Connection, category: str, exclude_user: str | N
         [*params, *SERIOUS, PRACTICE_QUEUE_LIMIT]).fetchall()
 
 
+# Minimum mistakes in one (user, time_class, category) bucket before phase 5's
+# play mode will steer toward it. Scoped per time_class, not summed across
+# cadences, matching every other query in this file (_scope()) -- blitz and
+# classical error profiles genuinely differ, so a category shouldn't unlock
+# steering in blitz off the back of mostly-classical mistakes. 30 is the same
+# "enough samples to rank by, not to measure precisely" floor used elsewhere
+# for this kind of gate (see DEFAULT_PARALLEL_THRESHOLD in analysis_runner.py).
+DEFAULT_ADAPTIVE_THRESHOLD = 30
+
+
+def adaptive_eligible_categories(conn: sqlite3.Connection, user: str, time_class: str,
+                                 threshold: int = DEFAULT_ADAPTIVE_THRESHOLD) -> set[str]:
+    """
+    Which mistake categories have enough samples, for this user and this
+    specific time class, for play mode's adaptive steering to be worth
+    turning on at all. Used to gate the /play page's adaptive toggle (and
+    shown to the player so they can see which categories qualify) --
+    NOT what move selection itself steers by, see eligible_phases() for that.
+    """
+    _, _, mistakes_where, mistakes_params = _scope(user.lower(), time_class)
+    rows = conn.execute(
+        f"SELECT category FROM mistakes {mistakes_where} "
+        f"GROUP BY category HAVING COUNT(*) >= ?",
+        [*mistakes_params, threshold]).fetchall()
+    return {row["category"] for row in rows}
+
+
+def eligible_phases(conn: sqlite3.Connection, user: str, time_class: str,
+                    threshold: int = DEFAULT_ADAPTIVE_THRESHOLD) -> set[str]:
+    """
+    Which game phases (opening/middlegame/endgame) have enough mistakes,
+    for this user and time class, for play mode's move selection to steer
+    toward. This is the phase-only v1 steering signal bot.py actually
+    scores candidate moves by -- phase is the only thing computable on a
+    hypothetical future position without real tactic-motif detection
+    (fork/pin/etc, deferred). A category can be "eligible" for the UI
+    toggle (adaptive_eligible_categories()) without its phase appearing
+    here if it's spread thin across phases; that's fine, it just means v1
+    steering can't usefully aim at it yet.
+    """
+    _, _, mistakes_where, mistakes_params = _scope(user.lower(), time_class)
+    rows = conn.execute(
+        f"SELECT phase FROM mistakes {mistakes_where} "
+        f"GROUP BY phase HAVING COUNT(*) >= ?",
+        [*mistakes_params, threshold]).fetchall()
+    return {row["phase"] for row in rows}
+
+
 def practice_stats(conn: sqlite3.Connection, user: str, time_class: str | None = None,
                    phase: str | None = None) -> dict:
     """

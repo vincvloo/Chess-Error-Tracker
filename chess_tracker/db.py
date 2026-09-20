@@ -117,6 +117,10 @@ CREATE INDEX IF NOT EXISTS idx_practice_attempts_user ON practice_attempts(pract
 SETTINGS_DEFAULTS = {
     "primary_user": None, "email": "", "depth": 14, "threads": 2,
     "pause": 0.6, "min_loss": INACCURACY,
+    # Phase 5 (play mode): which engine/difficulty the /play form pre-fills,
+    # and whether adaptive steering starts checked. Not enforced server-side
+    # beyond the default -- the /play form can always override per game.
+    "bot_engine": "stockfish", "bot_elo": 1500, "bot_adaptive": False,
 }
 
 
@@ -124,12 +128,18 @@ def get_settings(conn: sqlite3.Connection) -> dict:
     """All web-app settings, stored values merged over SETTINGS_DEFAULTS.
     Values come back cast to the same type as their default (settings are
     stored as TEXT -- sqlite has no other choice for a generic key/value
-    table)."""
+    table). bool is special-cased: bool("False") is True in plain Python,
+    which would make a stored "False" read back as enabled."""
     stored = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM settings")}
     merged = dict(SETTINGS_DEFAULTS)
     for key, value in stored.items():
         default = SETTINGS_DEFAULTS.get(key)
-        merged[key] = type(default)(value) if default is not None else value
+        if default is None:
+            merged[key] = value
+        elif isinstance(default, bool):
+            merged[key] = value in ("1", "true", "True")
+        else:
+            merged[key] = type(default)(value)
     return merged
 
 

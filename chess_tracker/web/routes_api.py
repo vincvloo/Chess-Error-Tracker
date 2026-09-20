@@ -1,7 +1,9 @@
-"""JSON API routes: job status/cancellation, and practice-mode move attempts."""
+"""JSON API routes: job status/cancellation, practice-mode move attempts, and
+play-mode (phase 5) moves."""
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 
 import chess
@@ -9,9 +11,13 @@ import chess.engine
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from ..analysis import MISTAKE, score_cp
+from ..analysis import INACCURACY, MISTAKE, analyse_bot_game, score_cp
+from ..bot import PLAY_MAX_ELO, PLAY_MIN_ELO, STOCKFISH_MIN_ELO, beginner_move, choose_bot_move
 from ..db import open_db
+from ..engine import find_engine, find_lc0, find_maia_weights
+from ..reports import eligible_phases
 from . import updater
+from .play_engine import MAIA_NODES
 
 router = APIRouter(prefix="/api")
 
@@ -235,6 +241,246 @@ async def practice_attempt(request: Request, mistake_id: int):
 
     result["correct"] = result["verdict"] == "best"  # kept for older clients
     return result
+
+
+# Depth for play mode's Stockfish moves. A plain constant, not read from
+# config, matching PRACTICE_JUDGE_DEPTH's rationale -- this needs to feel
+# responsive during a live game, not match archival analysis depth.
+# Benchmarked directly against the installed Stockfish: ~0.43s at
+# multipv=5/UCI_Elo=1500, ~1s at depth 16 -- 14 is the sweet spot.
+PLAY_STOCKFISH_DEPTH = 14
+
+
+def _game_outcome(board: chess.Board) -> str | None:
+    """None while the game is ongoing, else "white"/"black"/"draw".
+    claim_draw=True is required for threefold-repetition/50-move draws --
+    board.outcome() alone only catches checkmate/stalemate/insufficient
+    material/75-move/5-fold. Returns (result, termination) -- termination is
+    e.g. "checkmate"/"stalemate"/"insufficient_material"/"threefold_repetition"
+    (chess.Termination's own names, lowercased) so the client can say *why*
+    the game ended, not just who won -- "You win!" alone is meaningless
+    without knowing it was checkmate rather than, say, the bot timing out."""
+    outcome = board.outcome(claim_draw=True)
+    if outcome is None:
+        return None, None
+    result = "draw" if outcome.winner is None else ("white" if outcome.winner else "black")
+    return result, outcome.termination.name.lower()
+
+
+def _bot_reply(request: Request, board: chess.Board, engine_kind: str, elo: int,
+               adaptive: bool, time_class: str | None, user: str) -> tuple[chess.Move | None, JSONResponse | None]:
+    """
+    Shared by play_move() (human moved, now the bot replies) and
+    play_first_move() (human chose Black, bot opens the game -- there's no
+    human move to validate first). Returns (move, None) on success, or
+    (None, error_response) on failure.
+    """
+    eligible = set()
+    if adaptive and user and time_class:
+        conn = open_db(request.app.state.db_path)
+        try:
+            eligible = eligible_phases(conn, user, time_class)
+        finally:
+            conn.close()
+
+    weights = find_maia_weights() if engine_kind == "maia" else {}
+    maia_min = min(weights) if weights else None
+
+    if engine_kind == "maia" and maia_min is not None and elo >= maia_min:
+        lc0_path = find_lc0()
+        if not lc0_path:
+            return None, JSONResponse({"error": "Maia (lc0) isn't installed"}, status_code=503)
+        snapped = weights[min(weights, key=lambda e: abs(e - elo))]
+        engine_path, key = lc0_path, ("maia", snapped)
+        configure = {"WeightsFile": snapped}
+        # Only used the first time this key is opened (PlayEngineManager
+        # ignores it when reusing an already-open engine) -- absorbs lc0's
+        # graph-compile cost here rather than on the move below.
+        warm_up_board = chess.Board()
+        limit = chess.engine.Limit(nodes=MAIA_NODES)
+        move_fn = lambda engine: choose_bot_move(board, engine, "maia", limit, eligible)
+    else:
+        engine_path = request.app.state.engine_path or find_engine()
+        if not engine_path or not os.path.isfile(engine_path):
+            return None, JSONResponse({"error": "Stockfish isn't installed"}, status_code=503)
+        if engine_kind == "stockfish" and elo >= STOCKFISH_MIN_ELO:
+            key = ("stockfish", elo)
+            configure = {"UCI_LimitStrength": True, "UCI_Elo": elo}
+            warm_up_board = None
+            limit = chess.engine.Limit(depth=PLAY_STOCKFISH_DEPTH)
+            move_fn = lambda engine: choose_bot_move(board, engine, "stockfish", limit, eligible)
+        else:
+            # Beginner band: the requested Elo is below whatever real
+            # engine's own floor applies (Stockfish's UCI_Elo floor, or
+            # Maia's lowest installed weight file when Maia was picked but
+            # asked to go lower than even that). No calibrated engine
+            # exists this low for either -- see bot.beginner_move(). No
+            # UCI_Elo/WeightsFile configuration at all, so the process
+            # identity doesn't depend on the exact Elo value.
+            elo_floor = maia_min if (engine_kind == "maia" and maia_min) else STOCKFISH_MIN_ELO
+            key, configure, warm_up_board = ("beginner",), None, None
+            move_fn = lambda engine: beginner_move(board, engine, elo, elo_floor)
+
+    try:
+        with request.app.state.play_engine.acquire(
+                engine_path, key, configure=configure, warm_up_board=warm_up_board) as engine:
+            return move_fn(engine), None
+    except (chess.engine.EngineError, chess.engine.EngineTerminatedError, OSError):
+        # A dead engine process is useless to keep around -- drop it so the
+        # next request starts a fresh one instead of repeatedly failing
+        # against the same dead handle.
+        request.app.state.play_engine.close()
+        return None, JSONResponse(
+            {"error": "the engine crashed or is unavailable; try again"}, status_code=503)
+
+
+def _play_request_settings(body: dict) -> tuple[str, int, bool, str | None, str]:
+    engine_kind = body.get("engine") or "stockfish"
+    elo = max(PLAY_MIN_ELO, min(PLAY_MAX_ELO, int(body.get("elo") or 1500)))
+    adaptive = bool(body.get("adaptive"))
+    time_class = (body.get("timeClass") or "").strip() or None
+    user = (body.get("user") or "").strip().lower()
+    return engine_kind, elo, adaptive, time_class, user
+
+
+@router.get("/play/legal-moves")
+def play_legal_moves(fen: str):
+    """Legal moves for a client-held position, so play.html's board can
+    highlight targets the same way practice.html's does -- practice mode
+    gets this list for free from the stored mistake row; play mode has no
+    such row, so it's re-derived on demand instead."""
+    try:
+        board = chess.Board(fen)
+    except ValueError:
+        return JSONResponse({"error": "invalid fen"}, status_code=400)
+    if not board.is_valid():
+        return JSONResponse({"error": "invalid position"}, status_code=400)
+    return {"legalMoves": [m.uci() for m in board.legal_moves]}
+
+
+@router.post("/play/first-move")
+async def play_first_move(request: Request):
+    """The bot's opening move, for when the human chose to play Black --
+    there's no human move to validate first, unlike play_move()."""
+    body = await request.json()
+    engine_kind, elo, adaptive, time_class, user = _play_request_settings(body)
+    board = chess.Board()
+
+    bot_move, error = _bot_reply(request, board, engine_kind, elo, adaptive, time_class, user)
+    if error is not None:
+        return error
+    board.push(bot_move)
+    return {"fen": board.fen(), "botMove": bot_move.uci()}
+
+
+@router.post("/play/move")
+async def play_move(request: Request):
+    """
+    One ply of live play mode: validate + apply the human's move, then (if
+    the game isn't already over) the bot's reply. Fully stateless like
+    practice mode, but -- unlike practice mode -- there's no stored `mistakes`
+    row to re-derive the position from (a bot game is never persisted), so
+    the client's own `fen` is trusted as the current position. Same threat
+    model as the rest of this local single-user app; the *move* is still
+    validated as legal from that position before anything is applied.
+    """
+    body = await request.json()
+    from_sq, to_sq = body.get("from"), body.get("to")
+    promotion = body.get("promotion") or ""
+    fen = body.get("fen")
+    engine_kind, elo, adaptive, time_class, user = _play_request_settings(body)
+
+    if not fen or not from_sq or not to_sq:
+        return JSONResponse({"error": "fen, from and to are required"}, status_code=400)
+    try:
+        board = chess.Board(fen)
+    except ValueError:
+        return JSONResponse({"error": "invalid fen"}, status_code=400)
+    if not board.is_valid():
+        # chess.Board(fen) only checks syntax, not chess legality -- an
+        # inconsistent position (e.g. the side not to move already in check)
+        # can still generate a "legal" move that captures a king, which then
+        # crashes the real engine binary outright (verified directly: Stockfish
+        # exits with an access violation on such a position) rather than
+        # raising a catchable Python error. Reject before that point.
+        return JSONResponse({"error": "invalid position"}, status_code=400)
+    try:
+        move = chess.Move.from_uci(from_sq + to_sq + promotion)
+    except chess.InvalidMoveError:
+        return {"legal": False}
+    if move not in board.legal_moves:
+        return {"legal": False}
+
+    board.push(move)
+    outcome, termination = _game_outcome(board)
+    if outcome is not None:
+        return {"legal": True, "fen": board.fen(), "botMove": None,
+                "gameOver": True, "outcome": outcome, "termination": termination}
+
+    bot_move, error = _bot_reply(request, board, engine_kind, elo, adaptive, time_class, user)
+    if error is not None:
+        return error
+
+    board.push(bot_move)
+    outcome, termination = _game_outcome(board)
+    return {"legal": True, "fen": board.fen(), "botMove": bot_move.uci(),
+            "gameOver": outcome is not None, "outcome": outcome, "termination": termination}
+
+
+# Depth for post-game analysis, matching the analysis depth used elsewhere
+# for real chess.com games (see e.g. SETTINGS_DEFAULTS["depth"] in db.py) --
+# unlike the two constants above, this isn't about feeling responsive during
+# a live move, it's a one-off pass after the game the player is willing to
+# wait a few seconds for.
+POST_GAME_ANALYSIS_DEPTH = 14
+
+
+@router.post("/play/analyze")
+async def play_analyze(request: Request):
+    """
+    Full post-game analysis of a just-finished play-mode game -- the same
+    cp_loss/category logic used everywhere else in the app
+    (analysis.analyse_bot_game()), run against a fresh full-strength engine
+    instance kept separate from the (possibly weakened) play engine used
+    during the game itself, matching how practice mode's judge engine is
+    kept separate from the archival analysis engine. Bot games are never
+    persisted (see phase 5 plan) -- this is a one-off pass whose result is
+    only ever returned to the client, never written to the database.
+    """
+    body = await request.json()
+    uci_moves = body.get("moves") or []
+    colour = body.get("colour")
+    if not uci_moves or colour not in ("white", "black"):
+        return JSONResponse({"error": "moves and colour are required"}, status_code=400)
+
+    try:
+        moves = [chess.Move.from_uci(u) for u in uci_moves]
+    except chess.InvalidMoveError:
+        return JSONResponse({"error": "invalid move in list"}, status_code=400)
+
+    # Replay the whole sequence first to confirm every move is actually
+    # legal move-by-move -- analyse_bot_game() assumes a valid game, and a
+    # malformed client-sent list would otherwise misbehave the same way an
+    # invalid FEN did for /play/move (see board.is_valid() there).
+    board = chess.Board()
+    for move in moves:
+        if move not in board.legal_moves:
+            return JSONResponse({"error": "illegal move in list"}, status_code=400)
+        board.push(move)
+
+    engine_path = request.app.state.engine_path or find_engine()
+    if not engine_path or not os.path.isfile(engine_path):
+        return JSONResponse({"error": "Stockfish isn't installed"}, status_code=503)
+
+    me = chess.WHITE if colour == "white" else chess.BLACK
+    try:
+        with chess.engine.SimpleEngine.popen_uci(engine_path) as engine:
+            mistakes = analyse_bot_game(moves, me, engine, POST_GAME_ANALYSIS_DEPTH, INACCURACY)
+    except (chess.engine.EngineError, chess.engine.EngineTerminatedError, OSError):
+        return JSONResponse(
+            {"error": "the engine crashed or is unavailable; try again"}, status_code=503)
+
+    return {"mistakes": mistakes, "totalMoves": len(moves)}
 
 
 @router.delete("/practice-attempts/{attempt_id}")

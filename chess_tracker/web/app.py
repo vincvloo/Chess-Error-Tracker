@@ -2,9 +2,22 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from .jobs import JobManager
+from .play_engine import PlayEngineManager
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    yield
+    # Play mode (phase 5) is the only thing that keeps an engine process open
+    # across requests (everything else opens/closes per call) -- without
+    # this, stopping `chess-tracker serve` mid-game would leak a
+    # stockfish.exe/lc0.exe process.
+    app.state.play_engine.close()
 
 
 def create_app(db_path: str, engine_path: str | None = None) -> FastAPI:
@@ -14,10 +27,11 @@ def create_app(db_path: str, engine_path: str | None = None) -> FastAPI:
     shared across threads). `engine_path`, if given, skips auto-detecting
     Stockfish on every job start.
     """
-    app = FastAPI(title="Chess Error Tracker")
+    app = FastAPI(title="Chess Error Tracker", lifespan=_lifespan)
     app.state.db_path = db_path
     app.state.engine_path = engine_path
     app.state.jobs = JobManager(db_path)
+    app.state.play_engine = PlayEngineManager()
     # Populated lazily by the /api/update/check route -- a real git fetch,
     # so cached rather than re-run on every single home-page load.
     app.state.update_cache = {"checked_at": None, "result": None}
