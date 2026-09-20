@@ -1,7 +1,7 @@
 import chess
 import chess.engine
 
-from chess_tracker.analysis import classify, game_phase, resolve_colour, score_cp
+from chess_tracker.analysis import analyse_bot_game, classify, game_phase, resolve_colour, score_cp
 
 
 def test_score_cp_from_pov_of_the_side_it_favours():
@@ -120,3 +120,60 @@ def test_classify_falls_back_to_positional_or_planning_error():
     result = _classify("4k3/8/8/8/8/8/8/4K3 w - - 0 1", "e1d1", "e1f1",
                         chess.WHITE, None, cp_before=0, cp_after=0)
     assert result == "positional or planning error"
+
+
+class _ScriptedEngine:
+    """Returns scripted (best_uci, cp) pairs in order, one per analyse()
+    call -- cp is always tagged relative to `me` (the colour under test),
+    not board.turn, so test scripts can just write the cp_loss they intend
+    without juggling POV sign flips."""
+
+    def __init__(self, me, script):
+        self.me = me
+        self._script = list(script)
+
+    def analyse(self, board, limit):
+        uci, cp = self._script.pop(0)
+        return {"score": chess.engine.PovScore(chess.engine.Cp(cp), self.me),
+                "pv": [chess.Move.from_uci(uci)]}
+
+
+def test_analyse_bot_game_flags_a_blunder_with_correct_fields():
+    moves = [chess.Move.from_uci("d2d4"), chess.Move.from_uci("e7e5")]
+    # White's actual move (d4) differs from the engine's stated best (e4);
+    # a 30 -> -170 swing is a 200cp loss -- a "mistake" (BLUNDER starts at 250).
+    engine = _ScriptedEngine(chess.WHITE, [("e2e4", 30), ("d7d5", -170)])
+    mistakes = analyse_bot_game(moves, chess.WHITE, engine, depth=1, min_loss=50)
+    assert len(mistakes) == 1
+    m = mistakes[0]
+    assert m["played"] == "d4"
+    assert m["best"] == "e4"
+    assert m["cp_loss"] == 200
+    assert m["severity"] == "mistake"
+    assert m["move_number"] == 1
+    assert m["phase"] == "opening"
+
+
+def test_analyse_bot_game_only_scores_the_requested_colour():
+    moves = [chess.Move.from_uci("d2d4"), chess.Move.from_uci("g8f6")]
+    # Only one analyse() pair scripted -- if black's move were scored too,
+    # the script would run out and raise IndexError.
+    engine = _ScriptedEngine(chess.WHITE, [("e2e4", 30), ("d7d5", -170)])
+    mistakes = analyse_bot_game(moves, chess.WHITE, engine, depth=1, min_loss=50)
+    assert len(mistakes) == 1
+
+
+def test_analyse_bot_game_skips_moves_matching_the_engines_own_best():
+    moves = [chess.Move.from_uci("e2e4"), chess.Move.from_uci("e7e5")]
+    # Played move equals the engine's own best -- never flagged, regardless
+    # of the (contrived, shouldn't happen in practice) cp swing.
+    engine = _ScriptedEngine(chess.WHITE, [("e2e4", 30), ("e7e5", -170)])
+    mistakes = analyse_bot_game(moves, chess.WHITE, engine, depth=1, min_loss=50)
+    assert mistakes == []
+
+
+def test_analyse_bot_game_respects_min_loss_threshold():
+    moves = [chess.Move.from_uci("d2d4"), chess.Move.from_uci("e7e5")]
+    engine = _ScriptedEngine(chess.WHITE, [("e2e4", 30), ("d7d5", 10)])  # 20cp, below threshold
+    mistakes = analyse_bot_game(moves, chess.WHITE, engine, depth=1, min_loss=50)
+    assert mistakes == []

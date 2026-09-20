@@ -12,10 +12,12 @@ from fastapi.templating import Jinja2Templates
 
 from ..analysis import INACCURACY
 from ..analysis_runner import DEFAULT_PARALLEL_THRESHOLD, DEFAULT_WORKERS
+from ..bot import PLAY_MAX_ELO, PLAY_MIN_ELO, STOCKFISH_MIN_ELO
 from ..db import get_settings, open_db, set_settings
-from ..engine import ENGINE_HELP, find_engine
+from ..engine import ENGINE_HELP, find_engine, find_maia_weights
 from ..html_export import render_dashboard_html
-from ..reports import practice_pool, practice_queue, practice_stats, report_model, user_summaries
+from ..reports import (adaptive_eligible_categories, practice_pool, practice_queue,
+                       practice_stats, report_model, user_summaries)
 from .demo_data import render_demo_dashboard_html
 from .jobs import (BIG_UPDATE_THRESHOLD, FIRST_RUN_GAME_LIMIT, SECONDS_PER_GAME,
                    JobAlreadyRunningError)
@@ -342,3 +344,44 @@ def practice_page(request: Request, mistake_id: int | None = None, users: str = 
     return templates.TemplateResponse(request, "practice.html",
         {"empty": False, "pickCategory": False, "username": user, "data": data,
          "settings": settings})
+
+
+@router.get("/play", response_class=HTMLResponse)
+def play_page(request: Request, users: str = ""):
+    """
+    Phase 5: play a full game against Stockfish or Maia, optionally steered
+    toward whichever game phase this player statistically struggles in (once
+    they have enough mistake data for at least one time class -- see
+    reports.adaptive_eligible_categories()). The board/move UI reuses
+    practice.html's hand-rolled JS approach rather than a client-side chess
+    library.
+    """
+    user = next((u.strip() for u in users.split(",") if u.strip()), None)
+    conn = open_db(request.app.state.db_path)
+    try:
+        settings = get_settings(conn)
+        if not user:
+            user = settings["primary_user"]
+        if not user:
+            return HTMLResponse("<p>No user selected.</p>", status_code=400)
+
+        time_classes = sorted(r["time_class"] for r in conn.execute(
+            "SELECT DISTINCT time_class FROM games WHERE username = ? AND time_class IS NOT NULL",
+            (user.lower(),)).fetchall())
+        # Category names per time class, for the adaptive toggle's tooltip --
+        # eligibility itself is scoped per time class (see reports.py), so
+        # the JS re-checks this map when the player changes the dropdown
+        # rather than gating on one flat yes/no for the whole page.
+        eligible_by_tc = {
+            tc: sorted(adaptive_eligible_categories(conn, user, tc)) for tc in time_classes
+        }
+    finally:
+        conn.close()
+
+    maia_bands = sorted(find_maia_weights().keys())
+    return templates.TemplateResponse(request, "play.html", {
+        "username": user, "settings": settings, "time_classes": time_classes,
+        "eligible_by_tc": eligible_by_tc, "maia_available": bool(maia_bands),
+        "maia_bands": maia_bands, "min_elo": PLAY_MIN_ELO, "max_elo": PLAY_MAX_ELO,
+        "stockfish_min_elo": STOCKFISH_MIN_ELO,
+    })

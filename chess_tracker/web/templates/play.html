@@ -1,0 +1,517 @@
+{% extends "base.html" %}
+{% from "_update_control.html" import update_control %}
+{% block title %}Play - Chess Error Tracker{% endblock %}
+{% block head %}
+<style>
+.boardwrap { display: grid; grid-template-columns: 18px 1fr; grid-template-rows: 1fr 18px;
+  width: 100%; max-width: 438px; margin: 0 auto; }
+.board { grid-column: 2; grid-row: 1; display: grid; grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(8, 1fr); aspect-ratio: 1; border: 1px solid var(--border);
+  border-radius: 6px; overflow: hidden; }
+.ranks { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; }
+.ranks span, .files span { flex: 1; display: flex; align-items: center; justify-content: center;
+  font-size: 10.5px; color: var(--muted); }
+.files { grid-column: 2; grid-row: 2; display: flex; }
+.sq { display: flex; align-items: center; justify-content: center; font-size: min(6vw, 34px);
+  cursor: pointer; user-select: none; position: relative; }
+.sq.light { background: #EDE6D9; }
+.sq.dark { background: #9C7A5A; }
+@media (prefers-color-scheme: dark) {
+  .sq.light { background: #3a3b40; }
+  .sq.dark { background: #232427; }
+}
+.sq.selected { outline: 3px solid var(--accent); outline-offset: -3px; }
+.sq.target::after { content: ""; position: absolute; width: 28%; height: 28%; border-radius: 50%;
+  background: var(--accent); opacity: 0.55; }
+.sq.white-piece { color: #f5f5f5; text-shadow: 0 0 2px #000, 0 0 1px #000; }
+.sq.black-piece { color: #111; text-shadow: 0 0 2px #fff8, 0 0 1px #fff8; }
+.promo { display: none; justify-content: center; gap: 8px; margin: 10px 0; }
+.promo.show { display: flex; }
+.promo button { margin-top: 0; }
+#status { margin: 12px 0; font-size: 13.5px; min-height: 1.5em; }
+#status.over { font-weight: 600; }
+.approx { color: var(--muted); font-size: 11.5px; }
+#analyzeResult tr.reviewrow { cursor: pointer; }
+#analyzeResult tr.reviewrow:hover { background: var(--accent-soft); }
+#analyzeResult tr.reviewrow.selected-row { background: var(--accent-soft); outline: 1px solid var(--accent); }
+</style>
+{% endblock %}
+{% block content %}
+<div class="panel">
+  <div class="backnav"><a href="/">&larr; Home</a></div>
+  <div class="headerrow">
+    <h2>{{ username }} &mdash; play</h2>
+    {{ update_control(username, settings) }}
+  </div>
+  <div class="row">
+    <div>
+      <label for="engineSelect">Engine</label>
+      <select id="engineSelect">
+        <option value="stockfish">Stockfish</option>
+        <option value="maia" {% if not maia_available %}disabled{% endif %}>Maia{% if not maia_available %} (not installed){% endif %}</option>
+      </select>
+    </div>
+    <div>
+      <label for="eloInput">Difficulty (Elo)</label>
+      <input type="number" id="eloInput" value="{{ settings.bot_elo }}" min="{{ min_elo }}" max="{{ max_elo }}" step="10">
+      <div class="approx" id="eloNote"></div>
+    </div>
+    <div>
+      <label for="colourSelect">Play as</label>
+      <select id="colourSelect">
+        <option value="white">White</option>
+        <option value="black">Black</option>
+      </select>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label for="tcSelect">Time class (for adaptive steering)</label>
+      <select id="tcSelect">
+        {% for tc in time_classes %}<option value="{{ tc }}">{{ tc }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>&nbsp;</label>
+      <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text);">
+        <input type="checkbox" id="adaptiveCheckbox" style="width:auto;">
+        Adaptive (steer toward my weak spots)
+      </label>
+      <div class="approx" id="adaptiveNote"></div>
+    </div>
+  </div>
+  <button type="button" id="newGameBtn">New game</button>
+
+  <div id="boardPanel" style="display:none; margin-top:16px;">
+    <div class="boardwrap">
+      <div class="ranks" id="ranks"></div>
+      <div class="board" id="board"></div>
+      <div class="files" id="files"></div>
+    </div>
+    <div class="promo" id="promo">
+      <span class="muted">Promote to:</span>
+      <button type="button" data-p="q">Q</button>
+      <button type="button" data-p="r">R</button>
+      <button type="button" data-p="b">B</button>
+      <button type="button" data-p="n">N</button>
+    </div>
+    <div id="status"></div>
+    <div id="analyzeSection" style="display:none; margin-top:14px;">
+      <button type="button" id="analyzeBtn" class="btn-secondary">Analyze this game</button>
+      <div id="analyzeResult"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const DATA = {
+  username: {{ username | tojson }},
+  eligibleByTc: {{ eligible_by_tc | tojson }},
+  maiaAvailable: {{ maia_available | tojson }},
+  maiaBands: {{ maia_bands | tojson }},
+  minElo: {{ min_elo }},
+  maxElo: {{ max_elo }},
+  stockfishMinElo: {{ stockfish_min_elo }},
+};
+
+const PIECE_GLYPH = {
+  P: "♙", N: "♘", B: "♗", R: "♖", Q: "♕", K: "♔",
+  p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
+};
+const FILES = "abcdefgh".split("");
+
+function parseFenBoard(fen) {
+  const placement = fen.split(" ")[0];
+  const ranks = placement.split("/");
+  const board = {};
+  ranks.forEach((rankStr, i) => {
+    const rank = 8 - i;
+    let file = 0;
+    for (const ch of rankStr) {
+      if (/[1-8]/.test(ch)) {
+        file += parseInt(ch, 10);
+      } else {
+        board[FILES[file] + rank] = ch;
+        file += 1;
+      }
+    }
+  });
+  return board;
+}
+
+function sideToMove(fen) {
+  return fen.split(" ")[1] === "b" ? "black" : "white";
+}
+
+let currentFen = null;
+let selected = null;
+let pendingTarget = null;
+let legalMoves = [];
+let playerColour = "white";
+let gameActive = false;
+let moveList = []; // every ply's uci, human and bot, in order -- for post-game analysis
+let lastOutcome = null;
+let lastTermination = null;
+let lastMistakes = []; // last /api/play/analyze result, for click-to-review rows
+
+function squareEl(sq) {
+  return document.querySelector('.sq[data-square="' + sq + '"]');
+}
+
+function clearHighlights() {
+  document.querySelectorAll(".sq.selected, .sq.target").forEach(el => {
+    el.classList.remove("selected", "target");
+  });
+}
+
+function drawBoard(fen) {
+  const board = parseFenBoard(fen);
+  const boardEl = document.getElementById("board");
+  boardEl.innerHTML = "";
+  const flip = playerColour === "black";
+  const dispFiles = flip ? [...FILES].reverse() : FILES;
+  const dispRanks = flip ? [1, 2, 3, 4, 5, 6, 7, 8] : [8, 7, 6, 5, 4, 3, 2, 1];
+  dispRanks.forEach(rank => {
+    dispFiles.forEach(file => {
+      const sq = file + rank;
+      const div = document.createElement("div");
+      const light = (FILES.indexOf(file) + rank) % 2 === 0;
+      div.className = "sq " + (light ? "light" : "dark");
+      div.dataset.square = sq;
+      const piece = board[sq];
+      if (piece) {
+        div.textContent = PIECE_GLYPH[piece];
+        div.classList.add(piece === piece.toUpperCase() ? "white-piece" : "black-piece");
+      }
+      div.addEventListener("click", () => onSquareClick(sq));
+      boardEl.appendChild(div);
+    });
+  });
+
+  const ranksEl = document.getElementById("ranks");
+  ranksEl.innerHTML = "";
+  dispRanks.forEach(rank => {
+    const span = document.createElement("span");
+    span.textContent = rank;
+    ranksEl.appendChild(span);
+  });
+  const filesEl = document.getElementById("files");
+  filesEl.innerHTML = "";
+  dispFiles.forEach(file => {
+    const span = document.createElement("span");
+    span.textContent = file;
+    filesEl.appendChild(span);
+  });
+}
+
+function onSquareClick(sq) {
+  if (!gameActive || sideToMove(currentFen) !== playerColour) return;
+  const board = parseFenBoard(currentFen);
+  const mover = sideToMove(currentFen);
+
+  if (!selected) {
+    const piece = board[sq];
+    if (!piece) return;
+    const isMoversPiece = mover === "white" ? piece === piece.toUpperCase()
+                                            : piece === piece.toLowerCase();
+    if (!isMoversPiece) return;
+    selected = sq;
+    clearHighlights();
+    squareEl(sq).classList.add("selected");
+    legalMoves.filter(u => u.slice(0, 2) === sq).forEach(u => {
+      const t = squareEl(u.slice(2, 4));
+      if (t) t.classList.add("target");
+    });
+    return;
+  }
+
+  if (sq === selected) {
+    selected = null;
+    clearHighlights();
+    return;
+  }
+
+  const piece = board[sq];
+  const isMoversPiece = piece && (mover === "white" ? piece === piece.toUpperCase()
+                                                     : piece === piece.toLowerCase());
+  const candidates = legalMoves.filter(u => u.slice(0, 2) === selected && u.slice(2, 4) === sq);
+  if (!candidates.length) {
+    if (isMoversPiece) {
+      selected = sq;
+      clearHighlights();
+      squareEl(sq).classList.add("selected");
+      legalMoves.filter(u => u.slice(0, 2) === sq).forEach(u => {
+        const t = squareEl(u.slice(2, 4));
+        if (t) t.classList.add("target");
+      });
+    } else {
+      selected = null;
+      clearHighlights();
+    }
+    return;
+  }
+
+  if (candidates.length > 1) {
+    pendingTarget = { from: selected, to: sq };
+    document.getElementById("promo").classList.add("show");
+    return;
+  }
+
+  submitMove(selected, sq, null);
+}
+
+document.getElementById("promo").addEventListener("click", e => {
+  const btn = e.target.closest("button[data-p]");
+  if (!btn || !pendingTarget) return;
+  document.getElementById("promo").classList.remove("show");
+  submitMove(pendingTarget.from, pendingTarget.to, btn.dataset.p);
+  pendingTarget = null;
+});
+
+function currentSettings() {
+  return {
+    engine: document.getElementById("engineSelect").value,
+    elo: parseInt(document.getElementById("eloInput").value, 10) || DATA.minElo,
+    adaptive: document.getElementById("adaptiveCheckbox").checked,
+    timeClass: document.getElementById("tcSelect").value,
+    user: DATA.username,
+  };
+}
+
+async function fetchLegalMoves(fen) {
+  const r = await fetch("/api/play/legal-moves?fen=" + encodeURIComponent(fen));
+  const data = await r.json();
+  legalMoves = data.legalMoves || [];
+}
+
+const TERMINATION_LABELS = {
+  checkmate: "checkmate",
+  stalemate: "stalemate",
+  insufficient_material: "insufficient material",
+  seventyfive_moves: "the 75-move rule",
+  fivefold_repetition: "fivefold repetition",
+  fifty_moves: "the 50-move rule",
+  threefold_repetition: "threefold repetition",
+};
+
+function describeOutcome(outcome, termination) {
+  const reason = TERMINATION_LABELS[termination] || termination || "the game ending";
+  if (outcome === "draw") return "Draw by " + reason + ".";
+  const youWon = outcome === playerColour;
+  return (youWon ? "You win by " + reason + "!" : "The bot wins by " + reason + ".");
+}
+
+async function submitMove(from, to, promotion) {
+  gameActive = false;
+  clearHighlights();
+  const status = document.getElementById("status");
+  status.textContent = "Thinking…";
+  status.className = "";
+
+  const r = await fetch("/api/play/move", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fen: currentFen, from, to, promotion, ...currentSettings() }),
+  });
+  const result = await r.json();
+
+  if (result.error) {
+    status.textContent = "Error: " + result.error;
+    gameActive = true;
+    return;
+  }
+  if (!result.legal) {
+    status.textContent = "That move isn't legal here — try again.";
+    selected = null;
+    gameActive = true;
+    return;
+  }
+
+  moveList.push(from + to + (promotion || ""));
+  if (result.botMove) moveList.push(result.botMove);
+
+  currentFen = result.fen;
+  selected = null;
+  await fetchLegalMoves(currentFen);
+  drawBoard(currentFen);
+
+  if (result.gameOver) {
+    lastOutcome = result.outcome;
+    lastTermination = result.termination;
+    status.textContent = describeOutcome(result.outcome, result.termination);
+    status.className = "over";
+    document.getElementById("analyzeSection").style.display = "block";
+  } else {
+    status.textContent = (result.botMove ? "Bot played " + result.botMove + ". " : "") + "Your move.";
+    gameActive = true;
+  }
+}
+
+async function startGame() {
+  playerColour = document.getElementById("colourSelect").value;
+  currentFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+  moveList = [];
+  lastOutcome = null;
+  lastTermination = null;
+  lastMistakes = [];
+  document.getElementById("boardPanel").style.display = "";
+  document.getElementById("analyzeSection").style.display = "none";
+  document.getElementById("analyzeResult").innerHTML = "";
+  const status = document.getElementById("status");
+  status.className = "";
+  status.textContent = "Starting…";
+  await fetchLegalMoves(currentFen);
+  drawBoard(currentFen);
+
+  if (playerColour === "black") {
+    const r = await fetch("/api/play/first-move", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentSettings()),
+    });
+    const result = await r.json();
+    if (result.error) {
+      status.textContent = "Error: " + result.error;
+      return;
+    }
+    currentFen = result.fen;
+    moveList.push(result.botMove);
+    await fetchLegalMoves(currentFen);
+    drawBoard(currentFen);
+  }
+  gameActive = true;
+  status.textContent = "Your move.";
+}
+
+document.getElementById("newGameBtn").addEventListener("click", startGame);
+
+function updateAdaptiveAvailability() {
+  const tc = document.getElementById("tcSelect").value;
+  const cats = DATA.eligibleByTc[tc] || [];
+  const cb = document.getElementById("adaptiveCheckbox");
+  const note = document.getElementById("adaptiveNote");
+  cb.disabled = cats.length === 0;
+  if (cats.length === 0) {
+    cb.checked = false;
+    note.textContent = tc ? ("Not enough analysed mistakes yet for " + tc + ".") : "";
+  } else {
+    note.textContent = cats.length + " eligible categor" + (cats.length === 1 ? "y" : "ies")
+      + ": " + cats.join(", ");
+  }
+}
+document.getElementById("tcSelect").addEventListener("change", updateAdaptiveAvailability);
+
+function updateEloNote() {
+  const engine = document.getElementById("engineSelect").value;
+  const elo = parseInt(document.getElementById("eloInput").value, 10) || 0;
+  const note = document.getElementById("eloNote");
+  const floor = engine === "maia" ? (DATA.maiaBands[0] || DATA.stockfishMinElo) : DATA.stockfishMinElo;
+  note.textContent = elo < floor
+    ? "Below " + floor + ", no calibrated engine exists — approximate difficulty only."
+    : "";
+}
+
+function updateEloForEngine() {
+  const engine = document.getElementById("engineSelect").value;
+  const eloInput = document.getElementById("eloInput");
+  if (engine === "maia" && DATA.maiaBands.length) {
+    const v = parseInt(eloInput.value, 10) || DATA.maiaBands[0];
+    eloInput.value = DATA.maiaBands.reduce((a, b) => Math.abs(b - v) < Math.abs(a - v) ? b : a);
+    eloInput.min = DATA.minElo;
+    eloInput.max = DATA.maiaBands[DATA.maiaBands.length - 1];
+    eloInput.step = 100;
+  } else {
+    eloInput.min = DATA.minElo;
+    eloInput.max = DATA.maxElo;
+    eloInput.step = 10;
+  }
+  updateEloNote();
+}
+document.getElementById("engineSelect").addEventListener("change", updateEloForEngine);
+document.getElementById("eloInput").addEventListener("input", updateEloNote);
+
+const SEVERITY_LABEL = { blunder: "blunders", mistake: "mistakes", inaccuracy: "inaccuracies" };
+
+function renderAnalysis(data) {
+  const el = document.getElementById("analyzeResult");
+  lastMistakes = [];
+  if (data.error) {
+    el.innerHTML = '<p class="muted">' + data.error + '</p>';
+    return;
+  }
+  if (!data.mistakes.length) {
+    el.innerHTML = '<p class="muted">No mistakes flagged out of ' + data.totalMoves
+      + ' plies — clean game.</p>';
+    return;
+  }
+  lastMistakes = data.mistakes;
+  const counts = { blunder: 0, mistake: 0, inaccuracy: 0 };
+  data.mistakes.forEach(m => { counts[m.severity] = (counts[m.severity] || 0) + 1; });
+  const summary = Object.keys(SEVERITY_LABEL)
+    .filter(k => counts[k] > 0)
+    .map(k => counts[k] + " " + SEVERITY_LABEL[k])
+    .join(", ");
+  let html = '<p class="muted">' + data.mistakes.length + ' of your moves flagged (' + summary
+    + ') out of ' + data.totalMoves + ' plies. Click a row to see that position on the board.'
+    + ' <a href="#" id="backToFinalLink">Back to final position</a></p>';
+  html += '<table><thead><tr><th>move</th><th>phase</th><th>you played</th>'
+    + '<th>best</th><th>-cp</th><th>category</th></tr></thead><tbody>';
+  data.mistakes.forEach((m, i) => {
+    html += '<tr class="reviewrow" data-index="' + i + '"><td>' + m.move_number + '</td><td>'
+      + m.phase + '</td><td>' + m.played + '</td><td>' + m.best + '</td><td>' + m.cp_loss
+      + '</td><td>' + m.category + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  el.innerHTML = html;
+
+  el.querySelectorAll("tr.reviewrow").forEach(row => {
+    row.addEventListener("click", () => reviewMistake(parseInt(row.dataset.index, 10)));
+  });
+  document.getElementById("backToFinalLink").addEventListener("click", e => {
+    e.preventDefault();
+    backToFinalPosition();
+  });
+}
+
+function reviewMistake(index) {
+  const m = lastMistakes[index];
+  if (!m) return;
+  drawBoard(m.fen);
+  const status = document.getElementById("status");
+  status.textContent = "Move " + m.move_number + " (" + m.phase + "): you played " + m.played
+    + ", engine's best was " + m.best + " (−" + m.cp_loss + "cp).";
+  status.className = "";
+  document.querySelectorAll("#analyzeResult tr.reviewrow").forEach(el => el.classList.remove("selected-row"));
+  const row = document.querySelector('#analyzeResult tr[data-index="' + index + '"]');
+  if (row) row.classList.add("selected-row");
+}
+
+function backToFinalPosition() {
+  drawBoard(currentFen);
+  const status = document.getElementById("status");
+  status.textContent = describeOutcome(lastOutcome, lastTermination);
+  status.className = "over";
+  document.querySelectorAll("#analyzeResult tr.reviewrow").forEach(el => el.classList.remove("selected-row"));
+}
+
+document.getElementById("analyzeBtn").addEventListener("click", async () => {
+  const btn = document.getElementById("analyzeBtn");
+  btn.disabled = true;
+  const el = document.getElementById("analyzeResult");
+  el.innerHTML = '<p class="muted">Analyzing… (a few seconds)</p>';
+  try {
+    const r = await fetch("/api/play/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ moves: moveList, colour: playerColour }),
+    });
+    renderAnalysis(await r.json());
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+updateAdaptiveAvailability();
+updateEloForEngine();
+</script>
+{% endblock %}

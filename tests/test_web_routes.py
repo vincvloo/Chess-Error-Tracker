@@ -1002,3 +1002,179 @@ def test_update_apply_without_git_reports_failure(tmp_path, monkeypatch):
     assert r.status_code == 200
     assert r.json()["ok"] is False
 
+
+# ---- play mode (phase 5) --------------------------------------------------
+
+def _mock_play_engine(bot_move_uci):
+    """A stand-in SimpleEngine for play-mode tests: analyse() returns one
+    info dict with the given move as pv[0], regardless of multipv -- these
+    tests only need *a* legal bot move back, not to exercise steering
+    itself (see tests/test_bot.py for that)."""
+    engine = MagicMock()
+    engine.__enter__.return_value = engine
+    engine.analyse.return_value = {
+        "score": chess.engine.PovScore(chess.engine.Cp(20), chess.WHITE),
+        "pv": [chess.Move.from_uci(bot_move_uci)],
+    }
+    return engine
+
+
+def test_play_move_legal_move_gets_a_bot_reply(tmp_path, monkeypatch):
+    monkeypatch.setattr("chess.engine.SimpleEngine.popen_uci",
+                        lambda *a, **k: _mock_play_engine("e7e6"))
+    app = create_app(_empty_db(tmp_path), engine_path=_fake_engine_path(tmp_path))
+    r = TestClient(app).post("/api/play/move", json={
+        "fen": _START_FEN, "from": "e2", "to": "e4", "engine": "stockfish", "elo": 1500,
+    })
+    body = r.json()
+    assert body["legal"] is True
+    assert body["botMove"] == "e7e6"
+    assert body["gameOver"] is False
+    app.state.play_engine.close()
+
+
+def test_play_move_illegal_move_rejected(tmp_path):
+    client = TestClient(create_app(_empty_db(tmp_path)))
+    r = client.post("/api/play/move", json={
+        "fen": _START_FEN, "from": "e2", "to": "e5", "engine": "stockfish", "elo": 1500,
+    })
+    assert r.json() == {"legal": False}
+
+
+def test_play_move_rejects_invalid_position(tmp_path):
+    # Side not to move already in check -- syntactically valid FEN, but an
+    # impossible chess position. Verified directly against a real engine
+    # that feeding this through unchecked crashes the binary outright
+    # (access violation), so this must be rejected before reaching the
+    # engine at all.
+    client = TestClient(create_app(_empty_db(tmp_path)))
+    bad_fen = "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR b KQkq - 1 2"
+    r = client.post("/api/play/move", json={
+        "fen": bad_fen, "from": "h4", "to": "e1", "engine": "stockfish", "elo": 1500,
+    })
+    assert r.status_code == 400
+
+
+def test_play_move_checkmate_ends_game_without_consulting_engine(tmp_path, monkeypatch):
+    # If the engine were consulted here, this would raise -- proving the
+    # checkmate short-circuit happens before any engine call.
+    def _boom(*a, **k):
+        raise AssertionError("engine should not be consulted after checkmate")
+    monkeypatch.setattr("chess.engine.SimpleEngine.popen_uci", _boom)
+
+    app = create_app(_empty_db(tmp_path), engine_path=_fake_engine_path(tmp_path))
+    board = chess.Board()
+    for uci in ["f2f3", "e7e5", "g2g4"]:
+        board.push(chess.Move.from_uci(uci))
+    r = TestClient(app).post("/api/play/move", json={
+        "fen": board.fen(), "from": "d8", "to": "h4", "engine": "stockfish", "elo": 1500,
+    })
+    body = r.json()
+    assert body["gameOver"] is True
+    assert body["botMove"] is None
+    assert body["outcome"] == "black"
+    assert body["termination"] == "checkmate"
+
+
+def test_play_move_adaptive_with_no_data_has_no_effect(tmp_path, monkeypatch):
+    # No mistakes at all for this user/time_class -- eligible_phases() comes
+    # back empty, so choose_bot_move must take the no-MultiPV path. A mock
+    # that asserts multipv is None proves adaptive never actually engaged.
+    engine = MagicMock()
+    engine.__enter__.return_value = engine
+
+    def analyse(board, limit, multipv=None):
+        assert multipv is None, "adaptive steering should not engage with zero eligible data"
+        return {"score": chess.engine.PovScore(chess.engine.Cp(20), chess.WHITE),
+                "pv": [chess.Move.from_uci("e7e6")]}
+    engine.analyse.side_effect = analyse
+    monkeypatch.setattr("chess.engine.SimpleEngine.popen_uci", lambda *a, **k: engine)
+
+    app = create_app(_empty_db(tmp_path), engine_path=_fake_engine_path(tmp_path))
+    r = TestClient(app).post("/api/play/move", json={
+        "fen": _START_FEN, "from": "e2", "to": "e4", "engine": "stockfish", "elo": 1500,
+        "adaptive": True, "timeClass": "blitz", "user": "nobody",
+    })
+    body = r.json()
+    assert body["legal"] is True
+    assert body["botMove"] == "e7e6"
+
+
+def test_play_move_stockfish_not_installed_degrades_gracefully(tmp_path, monkeypatch):
+    monkeypatch.setattr("chess_tracker.web.routes_api.find_engine", lambda: None)
+    client = TestClient(create_app(_empty_db(tmp_path), engine_path=None))
+    r = client.post("/api/play/move", json={
+        "fen": _START_FEN, "from": "e2", "to": "e4", "engine": "stockfish", "elo": 1500,
+    })
+    assert r.status_code == 503
+
+
+def test_play_first_move_bot_opens_as_white(tmp_path, monkeypatch):
+    monkeypatch.setattr("chess.engine.SimpleEngine.popen_uci",
+                        lambda *a, **k: _mock_play_engine("e2e4"))
+    app = create_app(_empty_db(tmp_path), engine_path=_fake_engine_path(tmp_path))
+    r = TestClient(app).post("/api/play/first-move", json={"engine": "stockfish", "elo": 1500})
+    assert r.json()["botMove"] == "e2e4"
+
+
+def test_play_legal_moves_endpoint(tmp_path):
+    client = TestClient(create_app(_empty_db(tmp_path)))
+    r = client.get("/api/play/legal-moves", params={"fen": _START_FEN})
+    assert "e2e4" in r.json()["legalMoves"]
+
+
+def test_play_page_renders(tmp_path):
+    client = TestClient(create_app(_seeded_db(tmp_path)))
+    r = client.get("/play", params={"users": "alice"})
+    assert r.status_code == 200
+    assert "alice" in r.text
+
+
+def _mock_analyze_engine(me, script):
+    """Same scripted-(uci, cp)-pairs idea as _ScriptedEngine in
+    test_analysis.py, wrapped as a context-manager mock since /api/play/
+    analyze opens its engine with `with ... as engine:`."""
+    engine = MagicMock()
+    engine.__enter__.return_value = engine
+    calls = list(script)
+
+    def analyse(board, limit):
+        uci, cp = calls.pop(0)
+        return {"score": chess.engine.PovScore(chess.engine.Cp(cp), me),
+                "pv": [chess.Move.from_uci(uci)]}
+    engine.analyse.side_effect = analyse
+    return engine
+
+
+def test_play_analyze_returns_mistakes_for_a_short_game(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "chess.engine.SimpleEngine.popen_uci",
+        lambda *a, **k: _mock_analyze_engine(chess.WHITE, [("e2e4", 30), ("d7d5", -170)]))
+    client = TestClient(create_app(_empty_db(tmp_path), engine_path=_fake_engine_path(tmp_path)))
+    r = client.post("/api/play/analyze", json={"moves": ["d2d4", "e7e5"], "colour": "white"})
+    body = r.json()
+    assert body["totalMoves"] == 2
+    assert len(body["mistakes"]) == 1
+    assert body["mistakes"][0]["played"] == "d4"
+    assert body["mistakes"][0]["best"] == "e4"
+
+
+def test_play_analyze_rejects_illegal_move_list(tmp_path):
+    client = TestClient(create_app(_empty_db(tmp_path)))
+    r = client.post("/api/play/analyze", json={"moves": ["e2e4", "e2e4"], "colour": "white"})
+    assert r.status_code == 400
+
+
+def test_play_analyze_requires_moves_and_colour(tmp_path):
+    client = TestClient(create_app(_empty_db(tmp_path)))
+    assert client.post("/api/play/analyze", json={"moves": [], "colour": "white"}).status_code == 400
+    assert client.post("/api/play/analyze",
+                       json={"moves": ["e2e4"], "colour": "purple"}).status_code == 400
+
+
+def test_play_analyze_stockfish_not_installed_degrades_gracefully(tmp_path, monkeypatch):
+    monkeypatch.setattr("chess_tracker.web.routes_api.find_engine", lambda: None)
+    client = TestClient(create_app(_empty_db(tmp_path), engine_path=None))
+    r = client.post("/api/play/analyze", json={"moves": ["e2e4"], "colour": "white"})
+    assert r.status_code == 503
+

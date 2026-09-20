@@ -91,3 +91,69 @@ CHESS_ENGINE environment variable, or install it:
   macOS     brew install stockfish
   Debian    sudo apt install stockfish
 """.strip()
+
+
+def find_lc0() -> str | None:
+    """
+    Locate an lc0 (Leela Chess Zero) binary, used for Maia play. Unlike
+    Stockfish this has no winget/apt package, so most users won't have it --
+    callers must degrade to Stockfish-only when this returns None rather than
+    treating it as an error.
+
+    Order: an explicit CHESS_LC0 environment variable, then PATH, then the
+    manual-install locations someone would have unzipped an lc0 release into
+    (mirrors find_engine()'s C:\\Tools convention).
+    """
+    env = os.environ.get("CHESS_LC0")
+    if env and os.path.isfile(env):
+        return env
+
+    for name in ("lc0", "lc0.exe"):
+        found = shutil.which(name)
+        if found:
+            return found
+
+    candidates: list[str] = []
+    if sys.platform == "win32":
+        roots = [os.environ.get("LOCALAPPDATA", ""), os.path.expanduser("~"), "C:\\Tools"]
+        for root in filter(None, roots):
+            candidates += [
+                os.path.join(root, "lc0", "lc0.exe"),
+                os.path.join(root, "Lc0", "lc0.exe"),
+            ]
+    elif sys.platform == "darwin":
+        candidates += ["/opt/homebrew/bin/lc0", "/usr/local/bin/lc0"]
+    else:
+        candidates += ["/usr/games/lc0", "/usr/local/bin/lc0",
+                        os.path.expanduser("~/.local/bin/lc0")]
+
+    for path in candidates:
+        if os.path.isfile(path) and os.access(path, os.X_OK if sys.platform != "win32" else os.F_OK):
+            return path
+    return None
+
+
+def find_maia_weights() -> dict[int, str]:
+    """
+    Map Elo band (1100-1900, in steps of 100) -> path to that Maia weights
+    file, by globbing next to wherever find_lc0() found the binary (or under
+    CHESS_MAIA_DIR, if set -- useful when weights aren't stored alongside
+    the binary). Returns {} if lc0 itself isn't found or no weight files
+    are present, same "degrade gracefully" contract as find_lc0().
+    """
+    search_dir = os.environ.get("CHESS_MAIA_DIR")
+    if not search_dir:
+        lc0_path = find_lc0()
+        if not lc0_path:
+            return {}
+        search_dir = os.path.join(os.path.dirname(lc0_path), "maia_weights")
+
+    weights: dict[int, str] = {}
+    for path in glob.glob(os.path.join(search_dir, "maia-*.pb.gz")):
+        name = os.path.basename(path)
+        try:
+            elo = int(name[len("maia-"):-len(".pb.gz")])
+        except ValueError:
+            continue
+        weights[elo] = path
+    return weights
