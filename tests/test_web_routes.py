@@ -1178,3 +1178,202 @@ def test_play_analyze_stockfish_not_installed_degrades_gracefully(tmp_path, monk
     r = client.post("/api/play/analyze", json={"moves": ["e2e4"], "colour": "white"})
     assert r.status_code == 503
 
+
+# ---- puzzles -------------------------------------------------------------
+
+# A real mate-in-1: black plays an irrelevant pawn move, white delivers Re8#.
+_PUZZLE_FEN = "6k1/p4ppp/8/8/8/8/5PPP/4R1K1 b - - 0 1"
+_PUZZLE_MOVES = "a7a6 e1e8"
+
+
+def _puzzle_seeded_db(tmp_path) -> str:
+    db_path = str(tmp_path / "puzzles.db")
+    conn = open_db(db_path)
+    conn.execute("""
+        INSERT INTO puzzles (puzzle_id, fen, moves, rating, rating_deviation,
+                             popularity, nb_plays, themes, game_url, opening_tags, imported_at)
+        VALUES ('aaaaa', ?, ?, 900, 80, 90, 5000, ' mateIn1 backRankMate ',
+                'https://lichess.org/abc', '', '2026-01-01T00:00:00+00:00')
+    """, (_PUZZLE_FEN, _PUZZLE_MOVES))
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_puzzles_page_renders_the_puzzle_position_not_the_pre_setup_fen(tmp_path):
+    client = TestClient(create_app(_puzzle_seeded_db(tmp_path)))
+    r = client.get("/puzzles", params={"users": "alice", "minRating": 0, "maxRating": 9999})
+    assert r.status_code == 200
+    # The pre-setup-move FEN should never be shown as the starting position --
+    # only the position after moves[0] (a7a6) is applied.
+    assert _PUZZLE_FEN not in r.text
+    assert "e1e8" in r.text  # part of the embedded legal-move list
+
+
+def test_puzzles_page_shows_empty_state_when_nothing_matches(tmp_path):
+    # _puzzle_seeded_db inserts a puzzle directly via SQL, bypassing
+    # import_puzzles() -- so puzzle_source_stats (only ever populated by a
+    # real import) needs seeding too, to hit the "narrow filter, but
+    # puzzles genuinely exist elsewhere" message rather than the
+    # never-imported-anything one.
+    db_path = _puzzle_seeded_db(tmp_path)
+    conn = open_db(db_path)
+    conn.execute("INSERT INTO puzzle_source_stats (bucket_key, total_count, updated_at) "
+                "VALUES ('total', 1, '2026-01-01')")
+    conn.commit()
+    conn.close()
+
+    client = TestClient(create_app(db_path))
+    r = client.get("/puzzles", params={"users": "alice", "minRating": 2000, "maxRating": 2100})
+    assert r.status_code == 200
+    assert "No local puzzles match" in r.text
+
+
+def test_puzzles_page_shows_never_imported_state_when_db_is_truly_empty(tmp_path):
+    client = TestClient(create_app(_empty_db(tmp_path)))
+    r = client.get("/puzzles", params={"users": "alice"})
+    assert r.status_code == 200
+    assert "No puzzles have been imported yet" in r.text
+
+
+def test_puzzle_attempt_correct_solves_a_one_move_puzzle(tmp_path):
+    client = TestClient(create_app(_puzzle_seeded_db(tmp_path)))
+    r = client.post("/api/puzzles/aaaaa/attempt",
+                    json={"moveIndex": 1, "from": "e1", "to": "e8", "practicingUser": "alice"})
+    body = r.json()
+    assert body["legal"] is True
+    assert body["correct"] is True
+    assert body["solved"] is True
+    assert body["yourSan"] == "Re8#"
+
+
+def test_puzzle_attempt_wrong_move_reveals_the_solution(tmp_path):
+    client = TestClient(create_app(_puzzle_seeded_db(tmp_path)))
+    r = client.post("/api/puzzles/aaaaa/attempt",
+                    json={"moveIndex": 1, "from": "e1", "to": "e2", "practicingUser": "alice"})
+    body = r.json()
+    assert body["legal"] is True
+    assert body["correct"] is False
+    assert body["solved"] is False
+    assert body["bestSan"] == "Re8#"
+
+
+def test_puzzle_attempt_illegal_move(tmp_path):
+    client = TestClient(create_app(_puzzle_seeded_db(tmp_path)))
+    r = client.post("/api/puzzles/aaaaa/attempt",
+                    json={"moveIndex": 1, "from": "e1", "to": "e9"})
+    assert r.json() == {"legal": False}
+
+
+def test_puzzle_attempt_unknown_puzzle_404s(tmp_path):
+    client = TestClient(create_app(_puzzle_seeded_db(tmp_path)))
+    r = client.post("/api/puzzles/zzzzz/attempt",
+                    json={"moveIndex": 1, "from": "e1", "to": "e8"})
+    assert r.status_code == 404
+
+
+def test_puzzle_attempt_continues_a_multi_move_puzzle(tmp_path):
+    db_path = str(tmp_path / "multi.db")
+    conn = open_db(db_path)
+    # Setup(a2a3, white), solver correct(g8f6, black), opponent auto-reply
+    # (b1c3, white) -- puzzle isn't solved yet, one more solver move (f6e4)
+    # remains at index 3. Realistic shape: total length is always even,
+    # always ending on a solver move (see puzzle_attempt's docstring).
+    conn.execute("""
+        INSERT INTO puzzles (puzzle_id, fen, moves, rating, rating_deviation,
+                             popularity, nb_plays, themes, game_url, opening_tags, imported_at)
+        VALUES ('multi1', 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+                'a2a3 g8f6 b1c3 f6e4', 1000, 80, 90, 100, ' opening ', '', '', '2026-01-01')
+    """)
+    conn.commit()
+    conn.close()
+
+    client = TestClient(create_app(db_path))
+    r = client.post("/api/puzzles/multi1/attempt",
+                    json={"moveIndex": 1, "from": "g8", "to": "f6", "practicingUser": "alice"})
+    body = r.json()
+    assert body["legal"] is True
+    assert body["correct"] is True
+    assert body["solved"] is False
+    assert body["opponentMove"] == "Nc3"
+    assert body["nextMoveIndex"] == 3
+
+    # Finishing the puzzle from the returned nextMoveIndex should solve it.
+    r2 = client.post("/api/puzzles/multi1/attempt",
+                     json={"moveIndex": 3, "from": "f6", "to": "e4", "practicingUser": "alice"})
+    body2 = r2.json()
+    assert body2["correct"] is True
+    assert body2["solved"] is True
+
+
+def test_puzzle_attempt_logs_solved_and_failed_verdicts(tmp_path):
+    db_path = _puzzle_seeded_db(tmp_path)
+    client = TestClient(create_app(db_path))
+    client.post("/api/puzzles/aaaaa/attempt",
+                json={"moveIndex": 1, "from": "e1", "to": "e2", "practicingUser": "alice"})
+    conn = open_db(db_path)
+    rows = conn.execute("SELECT * FROM puzzle_attempts").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["verdict"] == "failed"
+    assert rows[0]["practicing_user"] == "alice"
+
+
+def test_puzzle_attempt_does_not_log_without_practicing_user(tmp_path):
+    db_path = _puzzle_seeded_db(tmp_path)
+    client = TestClient(create_app(db_path))
+    client.post("/api/puzzles/aaaaa/attempt", json={"moveIndex": 1, "from": "e1", "to": "e8"})
+    conn = open_db(db_path)
+    assert conn.execute("SELECT COUNT(*) AS n FROM puzzle_attempts").fetchone()["n"] == 0
+
+
+# ---- puzzles: "get more puzzles" background import ----------------------
+
+def test_start_puzzle_import_returns_job_status(tmp_path, monkeypatch):
+    monkeypatch.setattr("chess_tracker.web.puzzle_import.find_puzzle_source",
+                        lambda: "/cached.csv")
+    monkeypatch.setattr("chess_tracker.web.puzzle_import.import_puzzles",
+                        lambda conn, source_path, **kwargs: None)
+    client = TestClient(create_app(_empty_db(tmp_path)))
+    r = client.post("/api/puzzles/import", params={"minRating": 1000, "maxRating": 2000})
+    body = r.json()
+    assert "id" in body
+    assert body["state"] in ("queued", "downloading", "importing", "done")
+
+
+def test_active_puzzle_import_returns_null_when_idle(tmp_path):
+    client = TestClient(create_app(_empty_db(tmp_path)))
+    assert client.get("/api/puzzles/import/active").json() == {"job_id": None}
+
+
+def test_puzzle_import_status_404s_for_unknown_job(tmp_path):
+    client = TestClient(create_app(_empty_db(tmp_path)))
+    r = client.get("/api/puzzles/import/no-such-job")
+    assert r.status_code == 404
+
+
+def test_puzzle_import_cancel_404s_for_unknown_job(tmp_path):
+    client = TestClient(create_app(_empty_db(tmp_path)))
+    r = client.post("/api/puzzles/import/no-such-job/cancel")
+    assert r.status_code == 404
+
+
+def test_start_puzzle_import_conflicts_when_already_running(tmp_path, monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+    monkeypatch.setattr("chess_tracker.web.puzzle_import.find_puzzle_source",
+                        lambda: "/cached.csv")
+
+    def fake_import_puzzles(conn, source_path, **kwargs):
+        started.set()
+        release.wait(timeout=2)
+    monkeypatch.setattr("chess_tracker.web.puzzle_import.import_puzzles", fake_import_puzzles)
+
+    client = TestClient(create_app(_empty_db(tmp_path)))
+    client.post("/api/puzzles/import", params={})
+    assert started.wait(timeout=2)
+
+    r = client.post("/api/puzzles/import", params={})
+    assert r.status_code == 409
+
+    release.set()
+

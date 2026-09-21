@@ -1,5 +1,5 @@
-"""JSON API routes: job status/cancellation, practice-mode move attempts, and
-play-mode (phase 5) moves."""
+"""JSON API routes: job status/cancellation, practice-mode move attempts,
+play-mode (phase 5) moves, and puzzle-mode attempts."""
 
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ from ..analysis import INACCURACY, MISTAKE, analyse_bot_game, score_cp
 from ..bot import PLAY_MAX_ELO, PLAY_MIN_ELO, STOCKFISH_MIN_ELO, beginner_move, choose_bot_move
 from ..db import open_db
 from ..engine import find_engine, find_lc0, find_maia_weights
+from ..puzzles import DEFAULT_MIN_PLAYS, check_puzzle_move
+from .puzzle_import import PuzzleImportAlreadyRunningError
 from ..reports import eligible_phases
 from . import updater
 from .play_engine import MAIA_NODES
@@ -547,3 +549,147 @@ def update_apply(request: Request):
     # stale cached "yes" through to the next TTL window.
     request.app.state.update_cache = {"checked_at": None, "result": None}
     return result
+
+
+def _log_puzzle_attempt(request: Request, practicing_user: str, puzzle_id: str,
+                        verdict: str, move_index: int) -> None:
+    if not practicing_user:
+        return
+    conn = open_db(request.app.state.db_path)
+    try:
+        conn.execute(
+            "INSERT INTO puzzle_attempts "
+            "(practicing_user, puzzle_id, verdict, move_index_reached, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (practicing_user, puzzle_id, verdict, move_index,
+             datetime.now(timezone.utc).isoformat(timespec="seconds")))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@router.post("/puzzles/{puzzle_id}/attempt")
+async def puzzle_attempt(request: Request, puzzle_id: str):
+    """
+    Judge one puzzle-mode move attempt. Unlike /api/play/move, the board is
+    reconstructed authoritatively server-side from the puzzle's own stored
+    fen/moves plus `moveIndex` -- there IS a backing row here (unlike a bot
+    game), so this can and should follow practice_attempt's pattern of
+    trusting the stored position, not a client-sent one.
+
+    Puzzle solutions are forced "only moves" by construction, so correctness
+    is a plain string comparison (puzzles.check_puzzle_move()) -- no engine
+    call, unlike practice mode's cp_loss-judged "also_fine" nuance.
+    """
+    body = await request.json()
+    move_index = body.get("moveIndex")
+    from_sq, to_sq = body.get("from"), body.get("to")
+    promotion = body.get("promotion") or ""
+    practicing_user = (body.get("practicingUser") or "").strip().lower()
+    if move_index is None or not from_sq or not to_sq:
+        return JSONResponse({"error": "moveIndex, from and to are required"}, status_code=400)
+
+    conn = open_db(request.app.state.db_path)
+    try:
+        row = conn.execute("SELECT fen, moves FROM puzzles WHERE puzzle_id = ?",
+                           (puzzle_id,)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return JSONResponse({"error": "no such puzzle"}, status_code=404)
+
+    moves = row["moves"].split()
+    if not (1 <= move_index < len(moves)):
+        return JSONResponse({"error": "invalid moveIndex"}, status_code=400)
+
+    # Replay the stored setup move plus every move already confirmed correct
+    # up to (not including) this one, to reach the position this attempt is
+    # judged from.
+    board = chess.Board(row["fen"])
+    for uci in moves[:move_index]:
+        board.push(chess.Move.from_uci(uci))
+
+    try:
+        move = chess.Move.from_uci(from_sq + to_sq + promotion)
+    except chess.InvalidMoveError:
+        return {"legal": False}
+    if move not in board.legal_moves:
+        return {"legal": False}
+
+    your_san = board.san(move)
+    correct = check_puzzle_move(row["moves"], move_index, move)
+
+    if not correct:
+        best_move = chess.Move.from_uci(moves[move_index])
+        best_san = board.san(best_move)
+        board.push(move)
+        _log_puzzle_attempt(request, practicing_user, puzzle_id, "failed", move_index)
+        return {"legal": True, "correct": False, "solved": False, "yourSan": your_san,
+                "bestSan": best_san, "fen": board.fen()}
+
+    board.push(move)
+    next_index = move_index + 1
+    if next_index >= len(moves):
+        _log_puzzle_attempt(request, practicing_user, puzzle_id, "solved", move_index)
+        return {"legal": True, "correct": True, "solved": True, "yourSan": your_san,
+                "fen": board.fen(), "opponentMove": None, "nextMoveIndex": None}
+
+    opponent_move = chess.Move.from_uci(moves[next_index])
+    opponent_san = board.san(opponent_move)
+    board.push(opponent_move)
+    solved = (next_index + 1) >= len(moves)
+    if solved:
+        _log_puzzle_attempt(request, practicing_user, puzzle_id, "solved", next_index)
+    return {"legal": True, "correct": True, "solved": solved, "yourSan": your_san,
+            "fen": board.fen(), "opponentMove": opponent_san,
+            "nextMoveIndex": None if solved else next_index + 1}
+
+
+@router.post("/puzzles/import")
+def start_puzzle_import(request: Request, minRating: int | None = None,
+                        maxRating: int | None = None, minPlays: int = DEFAULT_MIN_PLAYS,
+                        themes: str = ""):
+    """
+    "Get more puzzles" -- downloads the Lichess source CSV if it isn't
+    already cached (see puzzles.find_puzzle_source()), then imports/tops up
+    matching the given filter. Runs in the background the same way a
+    chess.com fetch+analyse job does (see jobs.py), just tracked by a
+    separate PuzzleImportManager since the two jobs' parameters don't share
+    a shape. `minPlays` defaults to the same quality floor
+    scripts/import_puzzles.py uses, not unfiltered -- a web-triggered top-up
+    shouldn't be more permissive than the CLI's own default just because the
+    picker doesn't expose that control.
+    """
+    theme_list = [t.strip() for t in themes.split(",") if t.strip()] or None
+    try:
+        status = request.app.state.puzzle_import.start_job(
+            min_rating=minRating, max_rating=maxRating, min_plays=minPlays, themes=theme_list)
+    except PuzzleImportAlreadyRunningError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    return status.to_dict()
+
+
+@router.get("/puzzles/import/active")
+def active_puzzle_import(request: Request):
+    """Same "discover an in-flight job without already knowing its id"
+    purpose as /api/jobs/active -- registered ahead of
+    /puzzles/import/{job_id} for the same reason (Starlette matches routes
+    in registration order; "active" would otherwise be swallowed as a
+    job_id)."""
+    return {"job_id": request.app.state.puzzle_import.get_active_job_id()}
+
+
+@router.get("/puzzles/import/{job_id}")
+def puzzle_import_status(request: Request, job_id: str):
+    status = request.app.state.puzzle_import.get_status(job_id)
+    if status is None:
+        return JSONResponse({"error": "no such job"}, status_code=404)
+    return status
+
+
+@router.post("/puzzles/import/{job_id}/cancel")
+def cancel_puzzle_import(request: Request, job_id: str):
+    ok = request.app.state.puzzle_import.cancel(job_id)
+    if not ok:
+        return JSONResponse({"error": "no such job"}, status_code=404)
+    return {"cancelled": True}

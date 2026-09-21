@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 
 import chess
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -16,6 +16,8 @@ from ..bot import PLAY_MAX_ELO, PLAY_MIN_ELO, STOCKFISH_MIN_ELO
 from ..db import get_settings, open_db, set_settings
 from ..engine import ENGINE_HELP, find_engine, find_maia_weights
 from ..html_export import render_dashboard_html
+from ..puzzles import (DEFAULT_MAX_RATING, DEFAULT_MIN_RATING, THEME_GROUPS, humanize_theme,
+                       pick_random_puzzle, source_stats_for_filter)
 from ..reports import (adaptive_eligible_categories, practice_pool, practice_queue,
                        practice_stats, report_model, user_summaries)
 from .demo_data import render_demo_dashboard_html
@@ -385,3 +387,60 @@ def play_page(request: Request, users: str = ""):
         "maia_bands": maia_bands, "min_elo": PLAY_MIN_ELO, "max_elo": PLAY_MAX_ELO,
         "stockfish_min_elo": STOCKFISH_MIN_ELO,
     })
+
+
+@router.get("/puzzles", response_class=HTMLResponse)
+def puzzles_page(request: Request, users: str = "", minRating: int = DEFAULT_MIN_RATING,
+                 maxRating: int = DEFAULT_MAX_RATING, themes: list[str] = Query(default=[])):
+    """
+    Lichess puzzle solving mode. Picks one random puzzle from the locally
+    imported `puzzles` table matching the rating range/theme filter (see
+    scripts/import_puzzles.py for how that table gets populated) -- unlike
+    practice mode there's no per-user queue to page through, puzzles aren't
+    tied to any tracked player's own mistakes. `themes` arrives as one
+    query param per checked box (`?themes=fork&themes=pin`, the natural
+    shape a <form> with repeated checkbox names submits as), not a
+    comma-joined string.
+    """
+    user = next((u.strip() for u in users.split(",") if u.strip()), None)
+    theme_list = [t.strip() for t in themes if t.strip()]
+    conn = open_db(request.app.state.db_path)
+    try:
+        settings = get_settings(conn)
+        if not user:
+            user = settings["primary_user"]
+        if not user:
+            return HTMLResponse("<p>No user selected.</p>", status_code=400)
+
+        row = pick_random_puzzle(conn, minRating, maxRating, theme_list or None)
+        source_stats = None if row is not None else source_stats_for_filter(
+            conn, minRating, maxRating, theme_list or None)
+    finally:
+        conn.close()
+
+    base_ctx = {
+        "username": user, "settings": settings, "minRating": minRating,
+        "maxRating": maxRating, "themes": theme_list, "themeGroups": THEME_GROUPS,
+    }
+    if row is None:
+        return templates.TemplateResponse(request, "puzzles.html",
+            {**base_ctx, "found": False, "sourceStats": source_stats})
+
+    # The stored FEN is the position BEFORE the opponent's setup move
+    # (moves[0]) -- apply it server-side so the client only ever sees the
+    # real puzzle position, oriented with the solver's side at the bottom.
+    board = chess.Board(row["fen"])
+    moves = row["moves"].split()
+    board.push(chess.Move.from_uci(moves[0]))
+    data = {
+        "puzzleId": row["puzzle_id"],
+        "fen": board.fen(),
+        "colour": "white" if board.turn == chess.WHITE else "black",
+        "rating": row["rating"],
+        "themes": [humanize_theme(t) for t in row["themes"].split()],
+        "legalMoves": [m.uci() for m in board.legal_moves],
+        "moveIndex": 1,
+        "practicingUser": user,
+    }
+    return templates.TemplateResponse(request, "puzzles.html",
+        {**base_ctx, "found": True, "data": data})

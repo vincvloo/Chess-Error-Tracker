@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 from .jobs import JobManager
 from .play_engine import PlayEngineManager
+from .puzzle_import import PuzzleImportManager
 
 
 @asynccontextmanager
@@ -32,6 +33,7 @@ def create_app(db_path: str, engine_path: str | None = None) -> FastAPI:
     app.state.engine_path = engine_path
     app.state.jobs = JobManager(db_path)
     app.state.play_engine = PlayEngineManager()
+    app.state.puzzle_import = PuzzleImportManager(db_path)
     # Populated lazily by the /api/update/check route -- a real git fetch,
     # so cached rather than re-run on every single home-page load.
     app.state.update_cache = {"checked_at": None, "result": None}
