@@ -1,0 +1,386 @@
+{% extends "base.html" %}
+{% from "_update_control.html" import update_control %}
+{% block title %}Puzzles - Chess Error Tracker{% endblock %}
+{% block head %}
+<style>
+.boardwrap { display: grid; grid-template-columns: 18px 1fr; grid-template-rows: 1fr 18px;
+  width: 100%; max-width: 438px; margin: 0 auto; }
+.board { grid-column: 2; grid-row: 1; display: grid; grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(8, 1fr); aspect-ratio: 1; border: 1px solid var(--border);
+  border-radius: 6px; overflow: hidden; }
+.ranks { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; }
+.ranks span, .files span { flex: 1; display: flex; align-items: center; justify-content: center;
+  font-size: 10.5px; color: var(--muted); }
+.files { grid-column: 2; grid-row: 2; display: flex; }
+.sq { display: flex; align-items: center; justify-content: center; font-size: min(6vw, 34px);
+  cursor: pointer; user-select: none; position: relative; }
+.sq.light { background: #EDE6D9; }
+.sq.dark { background: #9C7A5A; }
+@media (prefers-color-scheme: dark) {
+  .sq.light { background: #3a3b40; }
+  .sq.dark { background: #232427; }
+}
+.sq.selected { outline: 3px solid var(--accent); outline-offset: -3px; }
+.sq.target::after { content: ""; position: absolute; width: 28%; height: 28%; border-radius: 50%;
+  background: var(--accent); opacity: 0.55; }
+.sq.white-piece { color: #f5f5f5; text-shadow: 0 0 2px #000, 0 0 1px #000; }
+.sq.black-piece { color: #111; text-shadow: 0 0 2px #fff8, 0 0 1px #fff8; }
+.promo { display: none; justify-content: center; gap: 8px; margin: 10px 0; }
+.promo.show { display: flex; }
+.promo button { margin-top: 0; }
+#feedback { margin: 12px 0; font-size: 13.5px; min-height: 1.5em; }
+#feedback.correct { color: #3fa66f; }
+#feedback.wrong { color: var(--danger); }
+#feedback.solved { color: #3fa66f; font-weight: 600; }
+.themegroup { margin: 8px 0; }
+.themegroupname { font-size: 11px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: 0.03em; margin-bottom: 4px; }
+.themegrid { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; }
+.themegrid label { display: flex; align-items: center; gap: 4px; color: var(--text); margin: 0; }
+.themegrid input { width: auto; }
+.puzzlehead { font-size: 12.5px; margin: 14px 0 10px; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="panel">
+  <div class="backnav"><a href="/">&larr; Home</a></div>
+  <div class="headerrow">
+    <h2>{{ username }} &mdash; puzzles</h2>
+    {{ update_control(username, settings) }}
+  </div>
+
+  <form method="get" action="/puzzles">
+    <input type="hidden" name="users" value="{{ username }}">
+    <div class="row">
+      <div>
+        <label for="minRating">Min rating</label>
+        <input type="number" id="minRating" name="minRating" value="{{ minRating }}">
+      </div>
+      <div>
+        <label for="maxRating">Max rating</label>
+        <input type="number" id="maxRating" name="maxRating" value="{{ maxRating }}">
+      </div>
+    </div>
+    <label>Themes (any match)</label>
+    {% for groupName, items in themeGroups %}
+    <div class="themegroup">
+      <div class="themegroupname">{{ groupName }}</div>
+      <div class="themegrid">
+        {% for code, label in items %}
+        <label><input type="checkbox" name="themes" value="{{ code }}" {% if code in themes %}checked{% endif %}> {{ label }}</label>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+    <button type="submit">New puzzle</button>
+  </form>
+
+  {% if not found %}
+  <div style="margin-top:14px;">
+    {% if sourceStats and sourceStats.grandTotal > 0 %}
+    <p class="muted">No local puzzles match this filter yet.
+      {% if sourceStats.themeTotals %}
+      {% for t, n in sourceStats.themeTotals.items() %}{{ n }} in the full Lichess database are tagged "{{ t }}"{% if not loop.last %}, {% endif %}{% endfor %};
+      {% endif %}
+      approximately {{ sourceStats.ratingRangeTotal }} exist in the {{ minRating }}-{{ maxRating }}
+      rating range overall (out of {{ sourceStats.grandTotal }} puzzles scanned so far -- not all
+      of those are necessarily imported locally).</p>
+    {% else %}
+    <p class="muted">No puzzles have been imported yet.</p>
+    {% endif %}
+    <button type="button" id="getMoreBtn" class="btn-secondary">Get more puzzles</button>
+    <div id="importProgress" class="muted" style="margin-top:8px; font-size:12.5px;"></div>
+  </div>
+  {% else %}
+  <div class="puzzlehead muted">
+    Puzzle {{ data.puzzleId }} &middot; rating {{ data.rating }}
+    {% if data.themes %} &middot; {{ data.themes | join(', ') }}{% endif %}
+  </div>
+  <div class="boardwrap">
+    <div class="ranks" id="ranks"></div>
+    <div class="board" id="board"></div>
+    <div class="files" id="files"></div>
+  </div>
+  <div class="promo" id="promo">
+    <span class="muted">Promote to:</span>
+    <button type="button" data-p="q">Q</button>
+    <button type="button" data-p="r">R</button>
+    <button type="button" data-p="b">B</button>
+    <button type="button" data-p="n">N</button>
+  </div>
+  <div id="feedback"></div>
+  {% endif %}
+</div>
+
+{% if not found %}
+<script>
+const IMPORT_PARAMS = {
+  minRating: {{ minRating }},
+  maxRating: {{ maxRating }},
+  themes: {{ themes | tojson }},
+};
+
+async function pollPuzzleImport(jobId) {
+  const progressEl = document.getElementById("importProgress");
+  const r = await fetch("/api/puzzles/import/" + jobId);
+  const status = await r.json();
+
+  if (status.state === "downloading") {
+    const pct = status.bytesTotal
+      ? Math.round(status.bytesDownloaded / status.bytesTotal * 100) + "%"
+      : (status.bytesDownloaded.toLocaleString() + " bytes");
+    progressEl.textContent = "Downloading the Lichess puzzle database… " + pct
+      + " (this only happens once; it's cached after).";
+    setTimeout(() => pollPuzzleImport(jobId), 1000);
+  } else if (status.state === "importing") {
+    progressEl.textContent = "Importing… " + status.scanned.toLocaleString()
+      + " scanned, " + status.imported.toLocaleString() + " imported.";
+    setTimeout(() => pollPuzzleImport(jobId), 1000);
+  } else if (status.state === "done") {
+    progressEl.textContent = status.imported.toLocaleString()
+      + " puzzles imported. Reloading…";
+    setTimeout(() => location.reload(), 1200);
+  } else if (status.state === "error") {
+    progressEl.textContent = "Error: " + status.error;
+    document.getElementById("getMoreBtn").disabled = false;
+  } else if (status.state === "cancelled") {
+    progressEl.textContent = "Cancelled.";
+    document.getElementById("getMoreBtn").disabled = false;
+  } else {
+    setTimeout(() => pollPuzzleImport(jobId), 1000);
+  }
+}
+
+document.getElementById("getMoreBtn").addEventListener("click", async () => {
+  const btn = document.getElementById("getMoreBtn");
+  btn.disabled = true;
+  document.getElementById("importProgress").textContent = "Starting…";
+
+  const params = new URLSearchParams();
+  if (IMPORT_PARAMS.minRating != null) params.set("minRating", IMPORT_PARAMS.minRating);
+  if (IMPORT_PARAMS.maxRating != null) params.set("maxRating", IMPORT_PARAMS.maxRating);
+  IMPORT_PARAMS.themes.forEach(t => params.append("themes", t));
+
+  const r = await fetch("/api/puzzles/import?" + params.toString(), { method: "POST" });
+  const started = await r.json();
+  if (started.error) {
+    document.getElementById("importProgress").textContent = "Error: " + started.error;
+    btn.disabled = false;
+    return;
+  }
+  pollPuzzleImport(started.id);
+});
+</script>
+{% endif %}
+
+{% if found %}
+<script>
+const DATA = {{ data | tojson }};
+
+const PIECE_GLYPH = {
+  P: "♙", N: "♘", B: "♗", R: "♖", Q: "♕", K: "♔",
+  p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
+};
+const FILES = "abcdefgh".split("");
+
+function parseFenBoard(fen) {
+  const placement = fen.split(" ")[0];
+  const ranks = placement.split("/");
+  const board = {};
+  ranks.forEach((rankStr, i) => {
+    const rank = 8 - i;
+    let file = 0;
+    for (const ch of rankStr) {
+      if (/[1-8]/.test(ch)) {
+        file += parseInt(ch, 10);
+      } else {
+        board[FILES[file] + rank] = ch;
+        file += 1;
+      }
+    }
+  });
+  return board;
+}
+
+function sideToMove(fen) {
+  return fen.split(" ")[1] === "b" ? "black" : "white";
+}
+
+let currentFen = DATA.fen;
+let moveIndex = DATA.moveIndex;
+let legalMoves = DATA.legalMoves;
+let selected = null;
+let pendingTarget = null;
+let attempted = false; // locked once the puzzle resolves (solved or failed)
+
+function squareEl(sq) {
+  return document.querySelector('.sq[data-square="' + sq + '"]');
+}
+
+function clearHighlights() {
+  document.querySelectorAll(".sq.selected, .sq.target").forEach(el => {
+    el.classList.remove("selected", "target");
+  });
+}
+
+function drawBoard(fen) {
+  const board = parseFenBoard(fen);
+  const boardEl = document.getElementById("board");
+  boardEl.innerHTML = "";
+  const flip = DATA.colour === "black";
+  const dispFiles = flip ? [...FILES].reverse() : FILES;
+  const dispRanks = flip ? [1, 2, 3, 4, 5, 6, 7, 8] : [8, 7, 6, 5, 4, 3, 2, 1];
+  dispRanks.forEach(rank => {
+    dispFiles.forEach(file => {
+      const sq = file + rank;
+      const div = document.createElement("div");
+      const light = (FILES.indexOf(file) + rank) % 2 === 0;
+      div.className = "sq " + (light ? "light" : "dark");
+      div.dataset.square = sq;
+      const piece = board[sq];
+      if (piece) {
+        div.textContent = PIECE_GLYPH[piece];
+        div.classList.add(piece === piece.toUpperCase() ? "white-piece" : "black-piece");
+      }
+      div.addEventListener("click", () => onSquareClick(sq));
+      boardEl.appendChild(div);
+    });
+  });
+
+  const ranksEl = document.getElementById("ranks");
+  ranksEl.innerHTML = "";
+  dispRanks.forEach(rank => {
+    const span = document.createElement("span");
+    span.textContent = rank;
+    ranksEl.appendChild(span);
+  });
+  const filesEl = document.getElementById("files");
+  filesEl.innerHTML = "";
+  dispFiles.forEach(file => {
+    const span = document.createElement("span");
+    span.textContent = file;
+    filesEl.appendChild(span);
+  });
+}
+
+function onSquareClick(sq) {
+  if (attempted || sideToMove(currentFen) !== DATA.colour) return;
+  const board = parseFenBoard(currentFen);
+  const mover = sideToMove(currentFen);
+
+  if (!selected) {
+    const piece = board[sq];
+    if (!piece) return;
+    const isMoversPiece = mover === "white" ? piece === piece.toUpperCase()
+                                            : piece === piece.toLowerCase();
+    if (!isMoversPiece) return;
+    selected = sq;
+    clearHighlights();
+    squareEl(sq).classList.add("selected");
+    legalMoves.filter(u => u.slice(0, 2) === sq).forEach(u => {
+      const t = squareEl(u.slice(2, 4));
+      if (t) t.classList.add("target");
+    });
+    return;
+  }
+
+  if (sq === selected) {
+    selected = null;
+    clearHighlights();
+    return;
+  }
+
+  const piece = board[sq];
+  const isMoversPiece = piece && (mover === "white" ? piece === piece.toUpperCase()
+                                                     : piece === piece.toLowerCase());
+  const candidates = legalMoves.filter(u => u.slice(0, 2) === selected && u.slice(2, 4) === sq);
+  if (!candidates.length) {
+    if (isMoversPiece) {
+      selected = sq;
+      clearHighlights();
+      squareEl(sq).classList.add("selected");
+      legalMoves.filter(u => u.slice(0, 2) === sq).forEach(u => {
+        const t = squareEl(u.slice(2, 4));
+        if (t) t.classList.add("target");
+      });
+    } else {
+      selected = null;
+      clearHighlights();
+    }
+    return;
+  }
+
+  if (candidates.length > 1) {
+    pendingTarget = { from: selected, to: sq };
+    document.getElementById("promo").classList.add("show");
+    return;
+  }
+
+  submitAttempt(selected, sq, null);
+}
+
+document.getElementById("promo").addEventListener("click", e => {
+  const btn = e.target.closest("button[data-p]");
+  if (!btn || !pendingTarget) return;
+  document.getElementById("promo").classList.remove("show");
+  submitAttempt(pendingTarget.from, pendingTarget.to, btn.dataset.p);
+  pendingTarget = null;
+});
+
+async function fetchLegalMoves(fen) {
+  const r = await fetch("/api/play/legal-moves?fen=" + encodeURIComponent(fen));
+  const data = await r.json();
+  legalMoves = data.legalMoves || [];
+}
+
+async function submitAttempt(from, to, promotion) {
+  attempted = true;
+  clearHighlights();
+  const feedback = document.getElementById("feedback");
+  feedback.textContent = "Checking…";
+  feedback.className = "";
+
+  const r = await fetch("/api/puzzles/" + DATA.puzzleId + "/attempt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ moveIndex, from, to, promotion, practicingUser: DATA.practicingUser }),
+  });
+  const result = await r.json();
+
+  if (!result.legal) {
+    feedback.textContent = "That move isn't legal here — try again.";
+    feedback.className = "";
+    attempted = false;
+    selected = null;
+    return;
+  }
+
+  currentFen = result.fen;
+  selected = null;
+  drawBoard(currentFen);
+
+  if (!result.correct) {
+    feedback.textContent = "Not quite — you played " + result.yourSan
+      + ", the move was " + result.bestSan + ".";
+    feedback.className = "wrong";
+    return; // puzzle over, board stays locked (attempted remains true)
+  }
+
+  if (result.solved) {
+    feedback.textContent = result.yourSan + " — solved!";
+    feedback.className = "solved";
+    return;
+  }
+
+  feedback.textContent = result.yourSan + "! Bot played " + result.opponentMove
+    + ". Find the next move.";
+  feedback.className = "correct";
+  moveIndex = result.nextMoveIndex;
+  await fetchLegalMoves(currentFen);
+  attempted = false;
+}
+
+drawBoard(currentFen);
+</script>
+{% endif %}
+{% endblock %}

@@ -108,6 +108,58 @@ CREATE TABLE IF NOT EXISTS practice_attempts (
     created_at       TEXT NOT NULL
 );
 
+-- Lichess puzzle database import. Unlike every other data table, this one
+-- has no `username` column -- puzzles aren't tied to a tracked chess.com
+-- player, they're a shared, global resource (the `settings` key/value table
+-- is the only other un-scoped table, but that's scalar config, not a large
+-- relational dataset). Imported/topped-up by scripts/import_puzzles.py.
+CREATE TABLE IF NOT EXISTS puzzles (
+    puzzle_id         TEXT PRIMARY KEY,
+    fen               TEXT NOT NULL,
+    -- Full original space-separated UCI move list. moves[0] is the
+    -- opponent's forced setup move (auto-applied to reach the real puzzle
+    -- position); the solver's own moves start at moves[1] and alternate
+    -- with more auto-played opponent replies from there. See
+    -- chess_tracker/puzzles.py for the walk logic.
+    moves             TEXT NOT NULL,
+    rating            INTEGER,
+    rating_deviation  INTEGER,
+    popularity        INTEGER,
+    nb_plays          INTEGER,
+    -- Space-padded (leading and trailing space) so a plain
+    -- `LIKE '% fork %'` filter can't false-positive on a theme name that's
+    -- a substring of another -- same simplicity tradeoff as `category`
+    -- being a plain TEXT column on `mistakes` rather than a join table.
+    themes            TEXT,
+    game_url          TEXT,
+    opening_tags      TEXT,
+    imported_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_puzzles_rating ON puzzles(rating);
+
+-- Puzzle-mode attempt log, same shape as practice_attempts (no FK to
+-- puzzles(puzzle_id) for the same reason practice_attempts has none: a
+-- future re-import shouldn't be blocked by attempt history referencing it).
+CREATE TABLE IF NOT EXISTS puzzle_attempts (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    practicing_user     TEXT NOT NULL,
+    puzzle_id           TEXT NOT NULL,
+    verdict             TEXT NOT NULL,   -- "solved" | "failed"
+    move_index_reached  INTEGER,
+    created_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_puzzle_attempts_user ON puzzle_attempts(practicing_user, puzzle_id);
+
+-- How many puzzles exist in the *source* CSV for a given rating bucket or
+-- theme, regardless of whether they were actually imported -- refreshed by
+-- every import/top-up scan (see puzzles.import_puzzles()). Answers "how
+-- many more are out there" without needing a live query against Lichess.
+CREATE TABLE IF NOT EXISTS puzzle_source_stats (
+    bucket_key   TEXT PRIMARY KEY,   -- e.g. "total", "rating:1400-1500", "theme:fork"
+    total_count  INTEGER,
+    updated_at   TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_mistakes_user ON mistakes(username);
 CREATE INDEX IF NOT EXISTS idx_mistakes_cat  ON mistakes(username, category);
 CREATE INDEX IF NOT EXISTS idx_games_user    ON games(username, end_time);
