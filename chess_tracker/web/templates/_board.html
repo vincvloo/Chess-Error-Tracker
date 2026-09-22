@@ -1,0 +1,216 @@
+{#
+  Shared chess board: markup, styling, and click-to-move/promotion behavior,
+  used identically by practice.html, puzzles.html, and play.html. Follows the
+  same macro-sharing pattern as _update_control.html -- the only other shared
+  template fragment in the app.
+
+  Before including {{ board_script() }}, the host page must declare:
+    let currentFen = ...;      // the live/interactive position
+    let legalMoves = [...];    // legal UCI moves for currentFen
+    let boardColour = "white" | "black";  // which side is shown at the bottom
+    function isLocked() { ... }                        // true => ignore clicks
+    function onBoardMove(from, to, promotion) { ... }   // called once a full move is chosen
+  and call {{ board_markup() }} wherever the board itself should render.
+#}
+
+{% macro board_styles() %}
+<style>
+.boardwrap { display: grid; grid-template-columns: 18px 1fr; grid-template-rows: 1fr 18px;
+  width: 100%; max-width: 438px; margin: 0 auto; }
+.board { grid-column: 2; grid-row: 1; display: grid; grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(8, 1fr); aspect-ratio: 1; border: 1px solid var(--border);
+  border-radius: 6px; overflow: hidden; }
+.ranks { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; }
+.ranks span, .files span { flex: 1; display: flex; align-items: center; justify-content: center;
+  font-size: 10.5px; color: var(--muted); }
+.files { grid-column: 2; grid-row: 2; display: flex; }
+.sq { display: flex; align-items: center; justify-content: center; font-size: min(6vw, 34px);
+  cursor: pointer; user-select: none; position: relative; }
+.sq.light { background: #EDE6D9; }
+.sq.dark { background: #9C7A5A; }
+@media (prefers-color-scheme: dark) {
+  .sq.light { background: #3a3b40; }
+  .sq.dark { background: #232427; }
+}
+.sq.selected { outline: 3px solid var(--accent); outline-offset: -3px; }
+.sq.target::after { content: ""; position: absolute; width: 28%; height: 28%; border-radius: 50%;
+  background: var(--accent); opacity: 0.55; }
+.sq.hint { outline: 3px solid #c9a227; outline-offset: -3px; }
+.sq.white-piece { color: #f5f5f5; text-shadow: 0 0 2px #000, 0 0 1px #000; }
+.sq.black-piece { color: #111; text-shadow: 0 0 2px #fff8, 0 0 1px #fff8; }
+.promo { display: none; justify-content: center; gap: 8px; margin: 10px 0; }
+.promo.show { display: flex; }
+.promo button { margin-top: 0; }
+</style>
+{% endmacro %}
+
+{% macro board_markup() %}
+<div class="boardwrap">
+  <div class="ranks" id="ranks"></div>
+  <div class="board" id="board"></div>
+  <div class="files" id="files"></div>
+</div>
+<div class="promo" id="promo">
+  <span class="muted">Promote to:</span>
+  <button type="button" data-p="q">Q</button>
+  <button type="button" data-p="r">R</button>
+  <button type="button" data-p="b">B</button>
+  <button type="button" data-p="n">N</button>
+</div>
+{% endmacro %}
+
+{% macro board_script() %}
+<script>
+const PIECE_GLYPH = {
+  P: "♙", N: "♘", B: "♗", R: "♖", Q: "♕", K: "♔",
+  p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
+};
+const FILES = "abcdefgh".split("");
+
+function parseFenBoard(fen) {
+  const placement = fen.split(" ")[0];
+  const ranks = placement.split("/"); // ranks[0] is rank 8
+  const board = {};
+  ranks.forEach((rankStr, i) => {
+    const rank = 8 - i;
+    let file = 0;
+    for (const ch of rankStr) {
+      if (/[1-8]/.test(ch)) {
+        file += parseInt(ch, 10);
+      } else {
+        board[FILES[file] + rank] = ch;
+        file += 1;
+      }
+    }
+  });
+  return board;
+}
+
+function sideToMove(fen) {
+  return fen.split(" ")[1] === "b" ? "black" : "white";
+}
+
+let selected = null;
+let pendingTarget = null; // {from, to} awaiting a promotion choice
+
+function squareEl(sq) {
+  return document.querySelector('.sq[data-square="' + sq + '"]');
+}
+
+function clearHighlights() {
+  document.querySelectorAll(".sq.selected, .sq.target, .sq.hint").forEach(el => {
+    el.classList.remove("selected", "target", "hint");
+  });
+}
+
+function drawBoard(fen) {
+  const board = parseFenBoard(fen);
+  const boardEl = document.getElementById("board");
+  boardEl.innerHTML = "";
+  const flip = boardColour === "black";
+  const dispFiles = flip ? [...FILES].reverse() : FILES;
+  const dispRanks = flip ? [1, 2, 3, 4, 5, 6, 7, 8] : [8, 7, 6, 5, 4, 3, 2, 1];
+  dispRanks.forEach(rank => {
+    dispFiles.forEach(file => {
+      const sq = file + rank;
+      const div = document.createElement("div");
+      const light = (FILES.indexOf(file) + rank) % 2 === 0;
+      div.className = "sq " + (light ? "light" : "dark");
+      div.dataset.square = sq;
+      const piece = board[sq];
+      if (piece) {
+        div.textContent = PIECE_GLYPH[piece];
+        div.classList.add(piece === piece.toUpperCase() ? "white-piece" : "black-piece");
+      }
+      div.addEventListener("click", () => onSquareClick(sq));
+      boardEl.appendChild(div);
+    });
+  });
+
+  const ranksEl = document.getElementById("ranks");
+  ranksEl.innerHTML = "";
+  dispRanks.forEach(rank => {
+    const span = document.createElement("span");
+    span.textContent = rank;
+    ranksEl.appendChild(span);
+  });
+  const filesEl = document.getElementById("files");
+  filesEl.innerHTML = "";
+  dispFiles.forEach(file => {
+    const span = document.createElement("span");
+    span.textContent = file;
+    filesEl.appendChild(span);
+  });
+}
+
+function onSquareClick(sq) {
+  if (isLocked()) return;
+  const board = parseFenBoard(currentFen);
+  const mover = sideToMove(currentFen);
+
+  if (!selected) {
+    const piece = board[sq];
+    if (!piece) return;
+    const isMoversPiece = mover === "white" ? piece === piece.toUpperCase()
+                                            : piece === piece.toLowerCase();
+    if (!isMoversPiece) return;
+    selected = sq;
+    clearHighlights();
+    squareEl(sq).classList.add("selected");
+    legalMoves.filter(u => u.slice(0, 2) === sq).forEach(u => {
+      const t = squareEl(u.slice(2, 4));
+      if (t) t.classList.add("target");
+    });
+    return;
+  }
+
+  if (sq === selected) {
+    selected = null;
+    clearHighlights();
+    return;
+  }
+
+  const piece = board[sq];
+  const isMoversPiece = piece && (mover === "white" ? piece === piece.toUpperCase()
+                                                     : piece === piece.toLowerCase());
+  const candidates = legalMoves.filter(u => u.slice(0, 2) === selected && u.slice(2, 4) === sq);
+  if (!candidates.length) {
+    if (isMoversPiece) {
+      selected = sq;
+      clearHighlights();
+      squareEl(sq).classList.add("selected");
+      legalMoves.filter(u => u.slice(0, 2) === sq).forEach(u => {
+        const t = squareEl(u.slice(2, 4));
+        if (t) t.classList.add("target");
+      });
+    } else {
+      selected = null;
+      clearHighlights();
+    }
+    return;
+  }
+
+  if (candidates.length > 1) {
+    pendingTarget = { from: selected, to: sq };
+    document.getElementById("promo").classList.add("show");
+    return;
+  }
+
+  onBoardMove(selected, sq, null);
+}
+
+document.getElementById("promo").addEventListener("click", e => {
+  const btn = e.target.closest("button[data-p]");
+  if (!btn || !pendingTarget) return;
+  document.getElementById("promo").classList.remove("show");
+  onBoardMove(pendingTarget.from, pendingTarget.to, btn.dataset.p);
+  pendingTarget = null;
+});
+
+async function fetchLegalMoves(fen) {
+  const r = await fetch("/api/play/legal-moves?fen=" + encodeURIComponent(fen));
+  const data = await r.json();
+  legalMoves = data.legalMoves || [];
+}
+</script>
+{% endmacro %}

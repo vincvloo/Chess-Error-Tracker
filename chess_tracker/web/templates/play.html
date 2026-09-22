@@ -1,33 +1,10 @@
 {% extends "base.html" %}
 {% from "_update_control.html" import update_control %}
+{% from "_board.html" import board_styles, board_markup, board_script %}
 {% block title %}Play - Chess Error Tracker{% endblock %}
 {% block head %}
+{{ board_styles() }}
 <style>
-.boardwrap { display: grid; grid-template-columns: 18px 1fr; grid-template-rows: 1fr 18px;
-  width: 100%; max-width: 438px; margin: 0 auto; }
-.board { grid-column: 2; grid-row: 1; display: grid; grid-template-columns: repeat(8, 1fr);
-  grid-template-rows: repeat(8, 1fr); aspect-ratio: 1; border: 1px solid var(--border);
-  border-radius: 6px; overflow: hidden; }
-.ranks { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; }
-.ranks span, .files span { flex: 1; display: flex; align-items: center; justify-content: center;
-  font-size: 10.5px; color: var(--muted); }
-.files { grid-column: 2; grid-row: 2; display: flex; }
-.sq { display: flex; align-items: center; justify-content: center; font-size: min(6vw, 34px);
-  cursor: pointer; user-select: none; position: relative; }
-.sq.light { background: #EDE6D9; }
-.sq.dark { background: #9C7A5A; }
-@media (prefers-color-scheme: dark) {
-  .sq.light { background: #3a3b40; }
-  .sq.dark { background: #232427; }
-}
-.sq.selected { outline: 3px solid var(--accent); outline-offset: -3px; }
-.sq.target::after { content: ""; position: absolute; width: 28%; height: 28%; border-radius: 50%;
-  background: var(--accent); opacity: 0.55; }
-.sq.white-piece { color: #f5f5f5; text-shadow: 0 0 2px #000, 0 0 1px #000; }
-.sq.black-piece { color: #111; text-shadow: 0 0 2px #fff8, 0 0 1px #fff8; }
-.promo { display: none; justify-content: center; gap: 8px; margin: 10px 0; }
-.promo.show { display: flex; }
-.promo button { margin-top: 0; }
 #status { margin: 12px 0; font-size: 13.5px; min-height: 1.5em; }
 #status.over { font-weight: 600; }
 .approx { color: var(--muted); font-size: 11.5px; }
@@ -83,18 +60,7 @@
   <button type="button" id="newGameBtn">New game</button>
 
   <div id="boardPanel" style="display:none; margin-top:16px;">
-    <div class="boardwrap">
-      <div class="ranks" id="ranks"></div>
-      <div class="board" id="board"></div>
-      <div class="files" id="files"></div>
-    </div>
-    <div class="promo" id="promo">
-      <span class="muted">Promote to:</span>
-      <button type="button" data-p="q">Q</button>
-      <button type="button" data-p="r">R</button>
-      <button type="button" data-p="b">B</button>
-      <button type="button" data-p="n">N</button>
-    </div>
+    {{ board_markup() }}
     <div id="status"></div>
     <div id="analyzeSection" style="display:none; margin-top:14px;">
       <button type="button" id="analyzeBtn" class="btn-secondary">Analyze this game</button>
@@ -114,159 +80,17 @@ const DATA = {
   stockfishMinElo: {{ stockfish_min_elo }},
 };
 
-const PIECE_GLYPH = {
-  P: "♙", N: "♘", B: "♗", R: "♖", Q: "♕", K: "♔",
-  p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
-};
-const FILES = "abcdefgh".split("");
-
-function parseFenBoard(fen) {
-  const placement = fen.split(" ")[0];
-  const ranks = placement.split("/");
-  const board = {};
-  ranks.forEach((rankStr, i) => {
-    const rank = 8 - i;
-    let file = 0;
-    for (const ch of rankStr) {
-      if (/[1-8]/.test(ch)) {
-        file += parseInt(ch, 10);
-      } else {
-        board[FILES[file] + rank] = ch;
-        file += 1;
-      }
-    }
-  });
-  return board;
-}
-
-function sideToMove(fen) {
-  return fen.split(" ")[1] === "b" ? "black" : "white";
-}
-
 let currentFen = null;
-let selected = null;
-let pendingTarget = null;
 let legalMoves = [];
-let playerColour = "white";
+let boardColour = "white";
 let gameActive = false;
 let moveList = []; // every ply's uci, human and bot, in order -- for post-game analysis
 let lastOutcome = null;
 let lastTermination = null;
 let lastMistakes = []; // last /api/play/analyze result, for click-to-review rows
 
-function squareEl(sq) {
-  return document.querySelector('.sq[data-square="' + sq + '"]');
-}
-
-function clearHighlights() {
-  document.querySelectorAll(".sq.selected, .sq.target").forEach(el => {
-    el.classList.remove("selected", "target");
-  });
-}
-
-function drawBoard(fen) {
-  const board = parseFenBoard(fen);
-  const boardEl = document.getElementById("board");
-  boardEl.innerHTML = "";
-  const flip = playerColour === "black";
-  const dispFiles = flip ? [...FILES].reverse() : FILES;
-  const dispRanks = flip ? [1, 2, 3, 4, 5, 6, 7, 8] : [8, 7, 6, 5, 4, 3, 2, 1];
-  dispRanks.forEach(rank => {
-    dispFiles.forEach(file => {
-      const sq = file + rank;
-      const div = document.createElement("div");
-      const light = (FILES.indexOf(file) + rank) % 2 === 0;
-      div.className = "sq " + (light ? "light" : "dark");
-      div.dataset.square = sq;
-      const piece = board[sq];
-      if (piece) {
-        div.textContent = PIECE_GLYPH[piece];
-        div.classList.add(piece === piece.toUpperCase() ? "white-piece" : "black-piece");
-      }
-      div.addEventListener("click", () => onSquareClick(sq));
-      boardEl.appendChild(div);
-    });
-  });
-
-  const ranksEl = document.getElementById("ranks");
-  ranksEl.innerHTML = "";
-  dispRanks.forEach(rank => {
-    const span = document.createElement("span");
-    span.textContent = rank;
-    ranksEl.appendChild(span);
-  });
-  const filesEl = document.getElementById("files");
-  filesEl.innerHTML = "";
-  dispFiles.forEach(file => {
-    const span = document.createElement("span");
-    span.textContent = file;
-    filesEl.appendChild(span);
-  });
-}
-
-function onSquareClick(sq) {
-  if (!gameActive || sideToMove(currentFen) !== playerColour) return;
-  const board = parseFenBoard(currentFen);
-  const mover = sideToMove(currentFen);
-
-  if (!selected) {
-    const piece = board[sq];
-    if (!piece) return;
-    const isMoversPiece = mover === "white" ? piece === piece.toUpperCase()
-                                            : piece === piece.toLowerCase();
-    if (!isMoversPiece) return;
-    selected = sq;
-    clearHighlights();
-    squareEl(sq).classList.add("selected");
-    legalMoves.filter(u => u.slice(0, 2) === sq).forEach(u => {
-      const t = squareEl(u.slice(2, 4));
-      if (t) t.classList.add("target");
-    });
-    return;
-  }
-
-  if (sq === selected) {
-    selected = null;
-    clearHighlights();
-    return;
-  }
-
-  const piece = board[sq];
-  const isMoversPiece = piece && (mover === "white" ? piece === piece.toUpperCase()
-                                                     : piece === piece.toLowerCase());
-  const candidates = legalMoves.filter(u => u.slice(0, 2) === selected && u.slice(2, 4) === sq);
-  if (!candidates.length) {
-    if (isMoversPiece) {
-      selected = sq;
-      clearHighlights();
-      squareEl(sq).classList.add("selected");
-      legalMoves.filter(u => u.slice(0, 2) === sq).forEach(u => {
-        const t = squareEl(u.slice(2, 4));
-        if (t) t.classList.add("target");
-      });
-    } else {
-      selected = null;
-      clearHighlights();
-    }
-    return;
-  }
-
-  if (candidates.length > 1) {
-    pendingTarget = { from: selected, to: sq };
-    document.getElementById("promo").classList.add("show");
-    return;
-  }
-
-  submitMove(selected, sq, null);
-}
-
-document.getElementById("promo").addEventListener("click", e => {
-  const btn = e.target.closest("button[data-p]");
-  if (!btn || !pendingTarget) return;
-  document.getElementById("promo").classList.remove("show");
-  submitMove(pendingTarget.from, pendingTarget.to, btn.dataset.p);
-  pendingTarget = null;
-});
+function isLocked() { return !gameActive || sideToMove(currentFen) !== boardColour; }
+function onBoardMove(from, to, promotion) { return submitMove(from, to, promotion); }
 
 function currentSettings() {
   return {
@@ -276,12 +100,6 @@ function currentSettings() {
     timeClass: document.getElementById("tcSelect").value,
     user: DATA.username,
   };
-}
-
-async function fetchLegalMoves(fen) {
-  const r = await fetch("/api/play/legal-moves?fen=" + encodeURIComponent(fen));
-  const data = await r.json();
-  legalMoves = data.legalMoves || [];
 }
 
 const TERMINATION_LABELS = {
@@ -297,7 +115,7 @@ const TERMINATION_LABELS = {
 function describeOutcome(outcome, termination) {
   const reason = TERMINATION_LABELS[termination] || termination || "the game ending";
   if (outcome === "draw") return "Draw by " + reason + ".";
-  const youWon = outcome === playerColour;
+  const youWon = outcome === boardColour;
   return (youWon ? "You win by " + reason + "!" : "The bot wins by " + reason + ".");
 }
 
@@ -348,7 +166,7 @@ async function submitMove(from, to, promotion) {
 }
 
 async function startGame() {
-  playerColour = document.getElementById("colourSelect").value;
+  boardColour = document.getElementById("colourSelect").value;
   currentFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
   moveList = [];
   lastOutcome = null;
@@ -363,7 +181,7 @@ async function startGame() {
   await fetchLegalMoves(currentFen);
   drawBoard(currentFen);
 
-  if (playerColour === "black") {
+  if (boardColour === "black") {
     const r = await fetch("/api/play/first-move", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -503,7 +321,7 @@ document.getElementById("analyzeBtn").addEventListener("click", async () => {
     const r = await fetch("/api/play/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ moves: moveList, colour: playerColour }),
+      body: JSON.stringify({ moves: moveList, colour: boardColour }),
     });
     renderAnalysis(await r.json());
   } finally {
@@ -514,4 +332,6 @@ document.getElementById("analyzeBtn").addEventListener("click", async () => {
 updateAdaptiveAvailability();
 updateEloForEngine();
 </script>
+
+{{ board_script() }}
 {% endblock %}
