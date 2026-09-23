@@ -20,6 +20,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from .. import gamification
 from ..analysis import INACCURACY
 from ..analysis_runner import run_analysis
 from ..chesscom import ChessComError
@@ -130,6 +131,8 @@ class JobManager:
         try:
             run_analysis(conn, users, email, engine_path, depth, threads, pause,
                          progress_cb=progress_cb, cancel_event=cancel_event, **kwargs)
+            for user in users:
+                gamification.recompute_game_ratings(conn, user)
             with self._lock:
                 status.state = "cancelled" if cancel_event.is_set() else "done"
         except ChessComError as exc:

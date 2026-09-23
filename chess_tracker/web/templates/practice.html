@@ -13,6 +13,9 @@
 #feedback.alsofine { color: #c9a227; }
 #feedback.wrong { color: var(--danger); }
 #feedback.thinking { color: var(--muted); font-style: italic; }
+.badgetoast { display: none; margin: 10px 0; padding: 10px 12px; border-radius: 8px;
+  background: var(--accent-soft); font-size: 13px; }
+.badgetoast.show { display: block; }
 .practicenav { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; align-items: center; }
 .practicenav > * { margin-top: 0; }
 .ownertag { font-weight: 600; color: var(--accent); }
@@ -78,6 +81,7 @@
 
   {{ board_markup() }}
   <div id="feedback"></div>
+  <div id="badgeToast" class="badgetoast"></div>
 
   <div class="practicenav">
     <button type="button" id="resetBtn" class="btn-secondary">Try again</button>
@@ -128,6 +132,12 @@ async function submitAttempt(from, to, promotion) {
     attempted = false;
     selected = null;
     return;
+  }
+
+  if (result.newBadges && result.newBadges.length) {
+    const toast = document.getElementById("badgeToast");
+    toast.textContent = result.newBadges.map(b => "Badge earned: " + b.label + " — " + b.description).join("  ");
+    toast.classList.add("show");
   }
 
   const hintNote = hintUsed ? " (hint used)" : "";

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Leaderboard - Chess Error Tracker{% endblock %}
+{% block content %}
+<div class="panel">
+  <div class="backnav"><a href="/">&larr; Home</a></div>
+  <h2>Leaderboard</h2>
+  <p class="muted">Players tracked on this computer who have practised, solved puzzles or earned
+    badges. Rating blends puzzles and analysed games; nothing here leaves your machine.</p>
+  {% if rows %}
+  <table>
+    <thead><tr><th>#</th><th>player</th><th>rating</th><th>streak</th><th>best streak</th>
+      <th>badges</th><th>best rush</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td><a class="navlink" href="/achievements?users={{ r.username }}">{{ r.username }}</a>{% if r.username == primary_user %} <span class="muted">(you)</span>{% endif %}</td>
+        <td>{{ r.rating if r.rating is not none else '-' }}</td>
+        <td>{{ r.streak }}</td>
+        <td>{{ r.best_streak }}</td>
+        <td>{{ r.badges }}</td>
+        <td>{{ r.rush if r.rush is not none else '-' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Nobody has any activity yet. Solve a puzzle or try a practice position to get on the board.</p>
+  {% endif %}
+</div>
+{% endblock %}

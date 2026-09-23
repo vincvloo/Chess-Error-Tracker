@@ -123,6 +123,43 @@ This is a genuinely separate install: the plain `pip install -e .` from setup
 stays exactly as light as it always was. The web app is additional, not a
 replacement -- everything above still works exactly as documented.
 
+### What's in the web app
+
+From the home page (once you've set which tracked player is "you"):
+
+| Page | What it does |
+|---|---|
+| **Practice** | Replays your own stored mistakes on an interactive board. Pick a category, try the move again, ask for a hint, and see whether the engine agrees ("also fine" counts). You can extend a queue with other tracked players' mistakes. |
+| **Play** | A full game against Stockfish or Maia at a chosen strength, optionally steered toward the game phase you struggle in. "Analyze this game" scores it with the same logic as your real games, and you can click any flagged move to see the position. Bot games are never stored. |
+| **Puzzles** | Lichess puzzles from a local, filtered copy of their public database (CC0). Filter by rating and theme, and use "Get more puzzles" to top up. |
+| **Daily puzzle** | One puzzle per day (UTC), the same for everyone on this machine. |
+| **Puzzle rush** | Solve as many puzzles as you can in 3 minutes. Only the final score is saved. |
+| **Achievements** | Streak, skill rating, badges, rating by theme, how each mistake category has moved over time, and your practice history. |
+| **Leaderboard** | Every tracked player on this machine who has any activity, side by side. Purely local. |
+| **Dashboard** | The interactive dashboard, live, with a severity filter. |
+
+### Streaks, ratings and badges
+
+Practising or solving a puzzle keeps a **daily streak** going. You get one automatic
+**streak freeze** per week, which bridges a single missed day. Days are counted in UTC.
+
+Your **skill rating** has an overall number and a number per theme (fork, pin, endgame, ...):
+
+- **Puzzles** move it live, Elo-style: beating a harder puzzle moves it more. A puzzle tagged
+  "fork pin" updates your overall, fork and pin ratings.
+- **Your analysed games** move it based on how cleanly you played (average centipawn loss per
+  move), not on whether you won. They feed the overall rating and the opening / middlegame /
+  endgame ratings. Tactical themes stay puzzle-only.
+- **Bot games** move it once, when you press "Analyze this game".
+
+The game part is a heuristic estimate, not a true Elo. It is rebuilt from scratch in date order
+after every analysis run, so fetching old games or re-analysing can't skew it. The puzzle and game
+halves are only blended when displayed. On the Puzzles page the rating range is pre-filled from
+your skill rating; whatever you type in still wins.
+
+**Badges** (streak lengths, puzzles solved, hint-free practice, rating milestones) are awarded when
+you earn them and kept permanently. Attempts made before badges existed still count.
+
 ---
 
 ## Options
@@ -234,6 +271,16 @@ Everything lives in one SQLite file, `chess_tracker.db` next to the script by de
 | `mistakes` | One row per error: move number, category, severity, centipawn loss, clock, FEN. |
 | `archives` | Raw monthly PGN payloads as fetched. |
 | `runs` | Audit log of every run: timestamp, requests made, games added. |
+| `settings` | Web app only: which player is "you", plus fetch settings. The CLI's own config file is separate. |
+| `practice_attempts` | One row per practice-mode move attempt. |
+| `puzzles`, `puzzle_source_stats` | The locally imported Lichess puzzles, and counts of how many exist in the full database. |
+| `puzzle_attempts` | One row per finished puzzle (solved or failed). |
+| `user_streaks` | Current and best streak, and the streak freeze. |
+| `user_puzzle_ratings` | Puzzle-derived rating, overall (empty theme) and per theme. |
+| `user_game_ratings` | Game-derived rating, overall and per phase. Rebuilt after each analysis run. |
+| `badges_earned` | Which badges each player has earned, and when. |
+| `daily_puzzles` | Today's (and past days') daily puzzle. |
+| `puzzle_rush_scores` | Final score of each puzzle rush. |
 
 Everything is scoped by username, so one database can hold any number of people
 without their data mixing.
@@ -392,14 +439,17 @@ The code is a small package, `chess_tracker/`, split along its natural seams:
 | Module | Responsibility |
 |---|---|
 | `engine.py` | Locates a Stockfish binary on the current platform. |
-| `db.py` | SQLite schema and persistence (`open_db`, `save_game`, `already_analysed`). |
+| `db.py` | The SQLite schema and saving/loading data. |
 | `chesscom.py` | The Chess.com API client: serial, cached, conditional requests. |
-| `analysis.py` | Stockfish analysis and mistake classification (`classify`, `analyse_game`). |
+| `analysis.py` | Stockfish analysis and mistake classification. |
 | `analysis_runner.py` | Orchestrates a fetch+analyse run; shared by the CLI and the web app's background jobs. |
 | `reports.py` | Text reports and player comparisons, straight from the database. |
-| `html_export.py` | The interactive HTML dashboard: `build_dashboard_data`/`render_dashboard_html` (shared with the web app's `/dashboard` route) plus `export_html`, which writes it to a file. |
+| `html_export.py` | The interactive HTML dashboard, shown live in the web app or exported to a file. |
+| `bot.py` | Play mode's opponent: move choice at a target Elo, including weakened play below each engine's calibrated floor. |
+| `puzzles.py` | The Lichess puzzle database: CSV import, random pick, answer checking. |
+| `gamification.py` | Streaks, puzzle and game skill ratings, badges, daily puzzle, puzzle rush and the leaderboard. |
 | `cli.py` | Argument parsing and orchestration (the `chess-tracker` entry point; dispatches to `web/` for `serve`). |
-| `web/` | The local FastAPI app (`chess-tracker serve`) -- `app.py` (the FastAPI app), `jobs.py` (background job manager, one job at a time), `routes_pages.py`/`routes_api.py`, `serve_cli.py` (the `serve` subcommand), `browser.py` (app-mode window launch). |
+| `web/` | The local web app (`chess-tracker serve`): its pages and API, the background jobs that fetch and analyse games or import puzzles, and the HTML templates. One shared chessboard template is used by Practice, Play and Puzzles. |
 
 ## Running the tests
 

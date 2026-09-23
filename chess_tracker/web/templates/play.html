@@ -175,6 +175,7 @@ async function startGame() {
   document.getElementById("boardPanel").style.display = "";
   document.getElementById("analyzeSection").style.display = "none";
   document.getElementById("analyzeResult").innerHTML = "";
+  document.getElementById("analyzeBtn").disabled = false;
   const status = document.getElementById("status");
   status.className = "";
   status.textContent = "Starting…";
@@ -321,11 +322,21 @@ document.getElementById("analyzeBtn").addEventListener("click", async () => {
     const r = await fetch("/api/play/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ moves: moveList, colour: boardColour }),
+      body: JSON.stringify({ moves: moveList, colour: boardColour, user: DATA.username }),
     });
-    renderAnalysis(await r.json());
-  } finally {
+    const data = await r.json();
+    renderAnalysis(data);
+    // Each analysis nudges the skill rating once, so it can only be run
+    // once per game (startGame() re-enables it).
+    if (data.error) btn.disabled = false;
+    if (data.newBadges && data.newBadges.length) {
+      const note = document.createElement("p");
+      note.textContent = data.newBadges.map(b => "Badge earned: " + b.label + " — " + b.description).join("  ");
+      el.prepend(note);
+    }
+  } catch (e) {
     btn.disabled = false;
+    throw e;
   }
 });
 

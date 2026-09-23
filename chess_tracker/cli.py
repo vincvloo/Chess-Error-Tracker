@@ -23,6 +23,7 @@ import logging
 import os
 import sys
 
+from . import gamification
 from .analysis import INACCURACY, PHASES, backfill_phase_moves
 from .analysis_runner import DEFAULT_PARALLEL_THRESHOLD, DEFAULT_WORKERS, run_analysis
 from .chesscom import ChessComError
@@ -183,6 +184,8 @@ def main() -> None:
                          parallel_threshold=args.parallel_threshold, workers=args.workers)
         except ChessComError as exc:
             sys.exit(str(exc))
+        for user in users:
+            gamification.recompute_game_ratings(conn, user)
 
     if args.phase or args.export_html:
         for user in users:

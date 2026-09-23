@@ -373,3 +373,21 @@ def check_puzzle_move(moves: str, move_index: int, move: chess.Move) -> bool:
     if move_index >= len(parts):
         return False
     return move.uci() == parts[move_index]
+
+
+def puzzle_position_payload(row: sqlite3.Row, practicing_user: str) -> dict:
+    """What the puzzle board needs to start: the position the solver actually
+    faces (the stored FEN is *before* the opponent's setup move, moves[0],
+    so it's applied here), which side they play, and the legal moves."""
+    board = chess.Board(row["fen"])
+    board.push(chess.Move.from_uci(row["moves"].split()[0]))
+    return {
+        "puzzleId": row["puzzle_id"],
+        "fen": board.fen(),
+        "colour": "white" if board.turn == chess.WHITE else "black",
+        "rating": row["rating"],
+        "themes": [humanize_theme(t) for t in row["themes"].split()],
+        "legalMoves": [m.uci() for m in board.legal_moves],
+        "moveIndex": 1,
+        "practicingUser": practicing_user,
+    }

@@ -16,6 +16,15 @@
 .themegrid label { display: flex; align-items: center; gap: 4px; color: var(--text); margin: 0; }
 .themegrid input { width: auto; }
 .puzzlehead { font-size: 12.5px; margin: 14px 0 10px; }
+.modelinks { font-size: 12.5px; margin: 0 0 12px; }
+.modelinks a.current { font-weight: 600; text-decoration: none; color: var(--text); }
+.rushbar { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin: 12px 0;
+  font-size: 14px; }
+.rushbar b { font-variant-numeric: tabular-nums; }
+.rushbar button { margin-top: 0; }
+.badgetoast { display: none; margin: 10px 0; padding: 10px 12px; border-radius: 8px;
+  background: var(--accent-soft); font-size: 13px; }
+.badgetoast.show { display: block; }
 </style>
 {% endblock %}
 {% block content %}
@@ -26,6 +35,16 @@
     {{ update_control(username, settings) }}
   </div>
 
+  <div class="modelinks">
+    <a href="/puzzles?users={{ username }}" {% if mode == 'normal' %}class="current"{% endif %}>Free practice</a> &middot;
+    <a href="/puzzles/daily?users={{ username }}" {% if mode == 'daily' %}class="current"{% endif %}>Daily puzzle</a> &middot;
+    <a href="/puzzles/rush?users={{ username }}" {% if mode == 'rush' %}class="current"{% endif %}>Puzzle rush</a>
+  </div>
+
+  {% if mode == 'normal' %}
+  {% if smartRange %}
+  <p class="muted" style="font-size:12.5px;">Rating range pre-filled from your skill rating.</p>
+  {% endif %}
   <form method="get" action="/puzzles">
     <input type="hidden" name="users" value="{{ username }}">
     <div class="row">
@@ -51,6 +70,7 @@
     {% endfor %}
     <button type="submit">New puzzle</button>
   </form>
+  {% endif %}
 
   {% if not found %}
   <div style="margin-top:14px;">
@@ -69,12 +89,24 @@
     <div id="importProgress" class="muted" style="margin-top:8px; font-size:12.5px;"></div>
   </div>
   {% else %}
-  <div class="puzzlehead muted">
+  {% if mode == 'daily' %}
+  <p style="margin:14px 0 0;"><b>Puzzle of the day</b>{% if dailySolved %} &mdash; you've solved it today.{% endif %}</p>
+  {% elif mode == 'rush' %}
+  <div class="rushbar">
+    <span>Time <b id="rushTime">{{ rushSeconds // 60 }}:{{ '%02d' % (rushSeconds % 60) }}</b></span>
+    <span>Solved <b id="rushScore">0</b></span>
+    <span class="muted">Best {{ rushBest if rushBest is not none else '-' }}</span>
+    <button type="button" id="rushStart">Start</button>
+  </div>
+  <div id="rushResult" class="muted"></div>
+  {% endif %}
+  <div class="puzzlehead muted" id="puzzleHead">
     Puzzle {{ data.puzzleId }} &middot; rating {{ data.rating }}
     {% if data.themes %} &middot; {{ data.themes | join(', ') }}{% endif %}
   </div>
   {{ board_markup() }}
   <div id="feedback"></div>
+  <div id="badgeToast" class="badgetoast"></div>
   {% endif %}
 </div>
 
@@ -149,8 +181,91 @@ let boardColour = DATA.colour;
 let moveIndex = DATA.moveIndex;
 let attempted = false; // locked once the puzzle resolves (solved or failed)
 
+const MODE = {{ mode | tojson }};
+const RUSH_SECONDS = {{ (rushSeconds or 0) | tojson }};
+let rushScore = 0;
+let rushLeft = RUSH_SECONDS;
+let rushTimer = null;
+let rushOver = false;
+if (MODE === "rush") attempted = true; // locked until Start is pressed
+
 function isLocked() { return attempted || sideToMove(currentFen) !== boardColour; }
 function onBoardMove(from, to, promotion) { return submitAttempt(from, to, promotion); }
+
+function showBadges(badges) {
+  if (!badges || !badges.length) return;
+  const el = document.getElementById("badgeToast");
+  el.textContent = "";
+  badges.forEach(b => {
+    const line = document.createElement("div");
+    line.textContent = "Badge earned: " + b.label + " — " + b.description;
+    el.appendChild(line);
+  });
+  el.classList.add("show");
+}
+
+function fmtTime(s) {
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+
+function loadPuzzle(d) {
+  Object.assign(DATA, d);
+  currentFen = d.fen;
+  legalMoves = d.legalMoves;
+  boardColour = d.colour;
+  moveIndex = d.moveIndex;
+  attempted = false;
+  selected = null;
+  document.getElementById("feedback").textContent = "";
+  document.getElementById("feedback").className = "";
+  document.getElementById("puzzleHead").textContent = "Puzzle " + d.puzzleId + " · rating "
+    + d.rating + (d.themes.length ? " · " + d.themes.join(", ") : "");
+  drawBoard(currentFen);
+}
+
+async function nextRushPuzzle() {
+  if (rushOver) return;
+  const r = await fetch("/api/puzzles/rush/next?user=" + encodeURIComponent(DATA.practicingUser));
+  if (!r.ok) { endRush(); return; }
+  const d = await r.json();
+  if (!rushOver) loadPuzzle(d);
+}
+
+async function endRush() {
+  if (rushOver) return;
+  rushOver = true;
+  clearInterval(rushTimer);
+  attempted = true;
+  document.getElementById("rushStart").disabled = true;
+  const r = await fetch("/api/puzzles/rush/finish", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ practicingUser: DATA.practicingUser, score: rushScore }),
+  });
+  const res = await r.json();
+  document.getElementById("rushResult").textContent = "Time's up! You solved " + rushScore
+    + (res.personalBest ? " — a new personal best." : " (best: " + res.best + ").");
+  showBadges(res.newBadges);
+}
+
+function rushAfterPuzzle(solved) {
+  if (MODE !== "rush" || rushOver) return;
+  if (solved) rushScore += 1;
+  document.getElementById("rushScore").textContent = rushScore;
+  setTimeout(nextRushPuzzle, 700);
+}
+
+if (MODE === "rush") {
+  document.getElementById("rushStart").addEventListener("click", () => {
+    document.getElementById("rushStart").disabled = true;
+    attempted = false;
+    rushTimer = setInterval(() => {
+      rushLeft -= 1;
+      document.getElementById("rushTime").textContent = fmtTime(Math.max(rushLeft, 0));
+      if (rushLeft <= 0) endRush();
+    }, 1000);
+  });
+}
 
 async function submitAttempt(from, to, promotion) {
   attempted = true;
@@ -177,17 +292,20 @@ async function submitAttempt(from, to, promotion) {
   currentFen = result.fen;
   selected = null;
   drawBoard(currentFen);
+  showBadges(result.newBadges);
 
   if (!result.correct) {
     feedback.textContent = "Not quite — you played " + result.yourSan
       + ", the move was " + result.bestSan + ".";
     feedback.className = "wrong";
+    rushAfterPuzzle(false);
     return; // puzzle over, board stays locked (attempted remains true)
   }
 
   if (result.solved) {
     feedback.textContent = result.yourSan + " — solved!";
     feedback.className = "solved";
+    rushAfterPuzzle(true);
     return;
   }
 
@@ -196,7 +314,7 @@ async function submitAttempt(from, to, promotion) {
   feedback.className = "correct";
   moveIndex = result.nextMoveIndex;
   await fetchLegalMoves(currentFen);
-  attempted = false;
+  attempted = rushOver;
 }
 </script>
 
