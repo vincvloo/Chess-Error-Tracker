@@ -1,6 +1,17 @@
 {% extends "base.html" %}
 {% from "_update_control.html" import update_control %}
 {% block title %}Achievements - Chess Error Tracker{% endblock %}
+{% block head %}
+<style>
+.badgegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px;
+  margin-top: 12px; }
+.badge { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12.5px;
+  display: flex; flex-direction: column; gap: 2px; }
+.badge span { color: var(--muted); font-size: 11.5px; }
+.badge.earned { background: var(--accent-soft); border-color: var(--accent); }
+.badge.locked { opacity: 0.5; }
+</style>
+{% endblock %}
 {% block content %}
 <div class="panel">
   <div class="backnav"><a href="/">&larr; Home</a></div>
@@ -21,6 +32,45 @@
 </div>
 
 {% if not empty %}
+<div class="panel">
+  <h2>Streak &amp; badges</h2>
+  <p>
+    <b>{{ progress.streak.current }}</b>-day streak
+    <span class="muted">(best {{ progress.streak.best }}; {{ progress.streak.freezes }} freeze{{ '' if progress.streak.freezes == 1 else 's' }} left this week)</span>
+    {% if progress.streak.at_risk %}<span class="muted"> &mdash; practise today to keep it going.</span>{% endif %}
+  </p>
+  {% if progress.rating.overall %}
+  <p>Skill rating <b>{{ progress.rating.overall.rating }}</b>
+    <span class="muted">(from puzzles and your analysed games)</span></p>
+  {% else %}
+  <p class="muted">No skill rating yet &mdash; solve a puzzle or analyse some games.</p>
+  {% endif %}
+  {% if progress.rush_best is not none %}<p class="muted">Best puzzle rush: {{ progress.rush_best }}</p>{% endif %}
+  <div class="badgegrid">
+    {% for b in progress.badges.earned %}
+    <div class="badge earned"><b>{{ b.label }}</b><span>{{ b.description }}</span></div>
+    {% endfor %}
+    {% for b in progress.badges.locked %}
+    <div class="badge locked"><b>{{ b.label }}</b><span>{{ b.description }}</span></div>
+    {% endfor %}
+  </div>
+</div>
+
+{% if progress.rating.themes %}
+<div class="panel">
+  <h2>Rating by theme</h2>
+  <table>
+    <thead><tr><th>theme</th><th>rating</th><th>samples</th></tr></thead>
+    <tbody>
+      {% for t in progress.rating.themes %}
+      <tr><td>{{ t.label }}</td><td>{{ t.rating }}</td><td>{{ t.samples }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">Tactical themes come from puzzles; opening/middlegame/endgame also count your games.</p>
+</div>
+{% endif %}
+
 {% if has_trend %}
 <div class="panel">
   <h2>Most improved</h2>

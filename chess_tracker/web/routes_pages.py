@@ -10,14 +10,15 @@ from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from .. import gamification
 from ..analysis import INACCURACY
 from ..analysis_runner import DEFAULT_PARALLEL_THRESHOLD, DEFAULT_WORKERS
 from ..bot import PLAY_MAX_ELO, PLAY_MIN_ELO, STOCKFISH_MIN_ELO
 from ..db import get_settings, open_db, set_settings
 from ..engine import ENGINE_HELP, find_engine, find_maia_weights
 from ..html_export import render_dashboard_html
-from ..puzzles import (DEFAULT_MAX_RATING, DEFAULT_MIN_RATING, THEME_GROUPS, humanize_theme,
-                       pick_random_puzzle, source_stats_for_filter)
+from ..puzzles import (DEFAULT_MAX_RATING, DEFAULT_MIN_RATING, THEME_GROUPS,
+                       pick_random_puzzle, puzzle_position_payload, source_stats_for_filter)
 from ..reports import (adaptive_eligible_categories, practice_pool, practice_queue,
                        practice_stats, report_model, user_summaries)
 from .demo_data import render_demo_dashboard_html
@@ -230,6 +231,17 @@ def achievements_page(request: Request, users: str = ""):
             user = settings["primary_user"]
         model = report_model(conn, user) if user else None
         stats = practice_stats(conn, user) if user else None
+        progress = None
+        if user:
+            # Attempts made before badges existed still count: award whatever
+            # the history already qualifies for.
+            gamification.evaluate_badges(conn, user)
+            progress = {
+                "streak": gamification.get_streak(conn, user),
+                "badges": gamification.get_badges(conn, user),
+                "rating": gamification.get_skill_rating(conn, user),
+                "rush_best": gamification.best_rush_score(conn, user),
+            }
     finally:
         conn.close()
 
@@ -248,7 +260,7 @@ def achievements_page(request: Request, users: str = ""):
         "n_serious": model["n_serious"], "recurring": model["recurring"],
         "improved": improved, "worsened": worsened,
         "has_trend": model["trend"] is not None,
-        "practice": stats,
+        "practice": stats, "progress": progress,
     })
 
 
@@ -390,8 +402,8 @@ def play_page(request: Request, users: str = ""):
 
 
 @router.get("/puzzles", response_class=HTMLResponse)
-def puzzles_page(request: Request, users: str = "", minRating: int = DEFAULT_MIN_RATING,
-                 maxRating: int = DEFAULT_MAX_RATING, themes: list[str] = Query(default=[])):
+def puzzles_page(request: Request, users: str = "", minRating: int | None = None,
+                 maxRating: int | None = None, themes: list[str] = Query(default=[])):
     """
     Lichess puzzle solving mode. Picks one random puzzle from the locally
     imported `puzzles` table matching the rating range/theme filter (see
@@ -401,6 +413,10 @@ def puzzles_page(request: Request, users: str = "", minRating: int = DEFAULT_MIN
     query param per checked box (`?themes=fork&themes=pin`, the natural
     shape a <form> with repeated checkbox names submits as), not a
     comma-joined string.
+
+    When the request carries no rating range (first visit, no form submitted
+    yet) the range is pre-filled from the player's own skill rating, if they
+    have one; once they submit the form, what they typed always wins.
     """
     user = next((u.strip() for u in users.split(",") if u.strip()), None)
     theme_list = [t.strip() for t in themes if t.strip()]
@@ -412,35 +428,92 @@ def puzzles_page(request: Request, users: str = "", minRating: int = DEFAULT_MIN
         if not user:
             return HTMLResponse("<p>No user selected.</p>", status_code=400)
 
+        smart = None
+        if minRating is None and maxRating is None:
+            smart = gamification.smart_rating_window(conn, user)
+        lo, hi = smart or (DEFAULT_MIN_RATING, DEFAULT_MAX_RATING)
+        minRating = lo if minRating is None else minRating
+        maxRating = hi if maxRating is None else maxRating
+
         row = pick_random_puzzle(conn, minRating, maxRating, theme_list or None)
         source_stats = None if row is not None else source_stats_for_filter(
             conn, minRating, maxRating, theme_list or None)
     finally:
         conn.close()
 
-    base_ctx = {
-        "username": user, "settings": settings, "minRating": minRating,
-        "maxRating": maxRating, "themes": theme_list, "themeGroups": THEME_GROUPS,
-    }
-    if row is None:
-        return templates.TemplateResponse(request, "puzzles.html",
-            {**base_ctx, "found": False, "sourceStats": source_stats})
+    return _puzzle_response(request, user, settings, row, {
+        "minRating": minRating, "maxRating": maxRating, "themes": theme_list,
+        "sourceStats": source_stats, "smartRange": smart is not None, "mode": "normal"})
 
-    # The stored FEN is the position BEFORE the opponent's setup move
-    # (moves[0]) -- apply it server-side so the client only ever sees the
-    # real puzzle position, oriented with the solver's side at the bottom.
-    board = chess.Board(row["fen"])
-    moves = row["moves"].split()
-    board.push(chess.Move.from_uci(moves[0]))
-    data = {
-        "puzzleId": row["puzzle_id"],
-        "fen": board.fen(),
-        "colour": "white" if board.turn == chess.WHITE else "black",
-        "rating": row["rating"],
-        "themes": [humanize_theme(t) for t in row["themes"].split()],
-        "legalMoves": [m.uci() for m in board.legal_moves],
-        "moveIndex": 1,
-        "practicingUser": user,
-    }
-    return templates.TemplateResponse(request, "puzzles.html",
-        {**base_ctx, "found": True, "data": data})
+
+def _puzzle_response(request: Request, user: str, settings: dict, row, extra: dict):
+    ctx = {"username": user, "settings": settings, "themeGroups": THEME_GROUPS, **extra}
+    if row is None:
+        return templates.TemplateResponse(request, "puzzles.html", {**ctx, "found": False})
+    return templates.TemplateResponse(request, "puzzles.html", {
+        **ctx, "found": True, "data": puzzle_position_payload(row, user)})
+
+
+def _resolve_user(conn, users: str):
+    user = next((u.strip() for u in users.split(",") if u.strip()), None)
+    settings = get_settings(conn)
+    return (user or settings["primary_user"]), settings
+
+
+@router.get("/puzzles/daily", response_class=HTMLResponse)
+def daily_puzzle_page(request: Request, users: str = ""):
+    """Today's puzzle -- the same one for everyone, picked at random the first
+    time it's asked for each (UTC) day."""
+    conn = open_db(request.app.state.db_path)
+    try:
+        user, settings = _resolve_user(conn, users)
+        if not user:
+            return HTMLResponse("<p>No user selected.</p>", status_code=400)
+        row = gamification.get_or_assign_daily_puzzle(conn)
+        solved = gamification.daily_solved(conn, user)
+        source_stats = None if row is not None else source_stats_for_filter(
+            conn, DEFAULT_MIN_RATING, DEFAULT_MAX_RATING, None)
+    finally:
+        conn.close()
+    return _puzzle_response(request, user, settings, row, {
+        "minRating": DEFAULT_MIN_RATING, "maxRating": DEFAULT_MAX_RATING, "themes": [],
+        "sourceStats": source_stats, "smartRange": False, "mode": "daily",
+        "dailySolved": solved})
+
+
+@router.get("/puzzles/rush", response_class=HTMLResponse)
+def puzzle_rush_page(request: Request, users: str = ""):
+    """Timed puzzle rush: solve as many as possible before the clock runs out.
+    Only the final score is stored (POST /api/puzzles/rush/finish)."""
+    conn = open_db(request.app.state.db_path)
+    try:
+        user, settings = _resolve_user(conn, users)
+        if not user:
+            return HTMLResponse("<p>No user selected.</p>", status_code=400)
+        window = gamification.smart_rating_window(conn, user)
+        row = pick_random_puzzle(conn, *(window or (None, None)))
+        if row is None and window:
+            row = pick_random_puzzle(conn)
+        best = gamification.best_rush_score(conn, user)
+        source_stats = None if row is not None else source_stats_for_filter(
+            conn, DEFAULT_MIN_RATING, DEFAULT_MAX_RATING, None)
+    finally:
+        conn.close()
+    return _puzzle_response(request, user, settings, row, {
+        "minRating": DEFAULT_MIN_RATING, "maxRating": DEFAULT_MAX_RATING, "themes": [],
+        "sourceStats": source_stats, "smartRange": False, "mode": "rush",
+        "rushSeconds": gamification.RUSH_DURATION_S, "rushBest": best})
+
+
+@router.get("/leaderboard", response_class=HTMLResponse)
+def leaderboard_page(request: Request):
+    """Every tracked player with some gamification activity, side by side --
+    purely local: only the players in this machine's own database."""
+    conn = open_db(request.app.state.db_path)
+    try:
+        settings = get_settings(conn)
+        rows = gamification.leaderboard(conn)
+    finally:
+        conn.close()
+    return templates.TemplateResponse(request, "leaderboard.html", {
+        "rows": rows, "settings": settings, "primary_user": settings["primary_user"]})

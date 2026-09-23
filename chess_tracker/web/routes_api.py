@@ -11,11 +11,12 @@ import chess.engine
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from .. import gamification
 from ..analysis import INACCURACY, MISTAKE, analyse_bot_game, score_cp
 from ..bot import PLAY_MAX_ELO, PLAY_MIN_ELO, STOCKFISH_MIN_ELO, beginner_move, choose_bot_move
 from ..db import open_db
 from ..engine import find_engine, find_lc0, find_maia_weights
-from ..puzzles import DEFAULT_MIN_PLAYS, check_puzzle_move
+from ..puzzles import DEFAULT_MIN_PLAYS, check_puzzle_move, pick_random_puzzle, puzzle_position_payload
 from .puzzle_import import PuzzleImportAlreadyRunningError
 from ..reports import eligible_phases
 from . import updater
@@ -238,6 +239,7 @@ async def practice_attempt(request: Request, mistake_id: int):
                  result["verdict"], int(hint_used),
                  datetime.now(timezone.utc).isoformat(timespec="seconds")))
             conn2.commit()
+            result["newBadges"] = gamification.record_progress(conn2, practicing_user)
         finally:
             conn2.close()
 
@@ -447,7 +449,8 @@ async def play_analyze(request: Request):
     during the game itself, matching how practice mode's judge engine is
     kept separate from the archival analysis engine. Bot games are never
     persisted (see phase 5 plan) -- this is a one-off pass whose result is
-    only ever returned to the client, never written to the database.
+    only ever returned to the client, never written to the database. (Its
+    effect on the player's skill rating is the one thing recorded.)
     """
     body = await request.json()
     uci_moves = body.get("moves") or []
@@ -482,7 +485,22 @@ async def play_analyze(request: Request):
         return JSONResponse(
             {"error": "the engine crashed or is unavailable; try again"}, status_code=503)
 
-    return {"mistakes": mistakes, "totalMoves": len(moves)}
+    new_badges: list[dict] = []
+    user = (body.get("user") or "").strip().lower()
+    if user:
+        # The bot game itself is still never stored -- only its effect on the
+        # skill rating is, once, right now (it can't be backdated or replayed).
+        conn = open_db(request.app.state.db_path)
+        try:
+            gamification.apply_bot_game(
+                conn, user, mistakes, gamification.phase_move_counts(moves, me))
+            new_badges = [{"code": c, "label": gamification.BADGES_BY_CODE[c]["label"],
+                           "description": gamification.BADGES_BY_CODE[c]["description"]}
+                          for c in gamification.evaluate_badges(conn, user)]
+        finally:
+            conn.close()
+
+    return {"mistakes": mistakes, "totalMoves": len(moves), "newBadges": new_badges}
 
 
 @router.delete("/practice-attempts/{attempt_id}")
@@ -552,9 +570,12 @@ def update_apply(request: Request):
 
 
 def _log_puzzle_attempt(request: Request, practicing_user: str, puzzle_id: str,
-                        verdict: str, move_index: int) -> None:
+                        verdict: str, move_index: int, puzzle_rating: int | None = None,
+                        themes: str | None = None) -> list[dict]:
+    """Log one finished puzzle, move the skill rating, count the day toward
+    the streak. Returns any badges this attempt just earned."""
     if not practicing_user:
-        return
+        return []
     conn = open_db(request.app.state.db_path)
     try:
         conn.execute(
@@ -564,6 +585,9 @@ def _log_puzzle_attempt(request: Request, practicing_user: str, puzzle_id: str,
             (practicing_user, puzzle_id, verdict, move_index,
              datetime.now(timezone.utc).isoformat(timespec="seconds")))
         conn.commit()
+        gamification.update_puzzle_rating(
+            conn, practicing_user, puzzle_rating, verdict == "solved", themes)
+        return gamification.record_progress(conn, practicing_user)
     finally:
         conn.close()
 
@@ -591,7 +615,7 @@ async def puzzle_attempt(request: Request, puzzle_id: str):
 
     conn = open_db(request.app.state.db_path)
     try:
-        row = conn.execute("SELECT fen, moves FROM puzzles WHERE puzzle_id = ?",
+        row = conn.execute("SELECT fen, moves, rating, themes FROM puzzles WHERE puzzle_id = ?",
                            (puzzle_id,)).fetchone()
     finally:
         conn.close()
@@ -623,26 +647,68 @@ async def puzzle_attempt(request: Request, puzzle_id: str):
         best_move = chess.Move.from_uci(moves[move_index])
         best_san = board.san(best_move)
         board.push(move)
-        _log_puzzle_attempt(request, practicing_user, puzzle_id, "failed", move_index)
+        badges = _log_puzzle_attempt(request, practicing_user, puzzle_id, "failed",
+                                     move_index, row["rating"], row["themes"])
         return {"legal": True, "correct": False, "solved": False, "yourSan": your_san,
-                "bestSan": best_san, "fen": board.fen()}
+                "bestSan": best_san, "fen": board.fen(), "newBadges": badges}
 
     board.push(move)
     next_index = move_index + 1
     if next_index >= len(moves):
-        _log_puzzle_attempt(request, practicing_user, puzzle_id, "solved", move_index)
+        badges = _log_puzzle_attempt(request, practicing_user, puzzle_id, "solved",
+                                     move_index, row["rating"], row["themes"])
         return {"legal": True, "correct": True, "solved": True, "yourSan": your_san,
-                "fen": board.fen(), "opponentMove": None, "nextMoveIndex": None}
+                "fen": board.fen(), "opponentMove": None, "nextMoveIndex": None,
+                "newBadges": badges}
 
     opponent_move = chess.Move.from_uci(moves[next_index])
     opponent_san = board.san(opponent_move)
     board.push(opponent_move)
     solved = (next_index + 1) >= len(moves)
+    badges = []
     if solved:
-        _log_puzzle_attempt(request, practicing_user, puzzle_id, "solved", next_index)
+        badges = _log_puzzle_attempt(request, practicing_user, puzzle_id, "solved",
+                                     next_index, row["rating"], row["themes"])
     return {"legal": True, "correct": True, "solved": solved, "yourSan": your_san,
             "fen": board.fen(), "opponentMove": opponent_san,
-            "nextMoveIndex": None if solved else next_index + 1}
+            "nextMoveIndex": None if solved else next_index + 1, "newBadges": badges}
+
+
+@router.get("/puzzles/rush/next")
+def puzzle_rush_next(request: Request, user: str = ""):
+    """The next puzzle for a rush run, drawn from a window around the
+    player's own skill rating (the whole imported range if they have none)."""
+    user = user.strip().lower()
+    conn = open_db(request.app.state.db_path)
+    try:
+        window = gamification.smart_rating_window(conn, user) if user else None
+        row = pick_random_puzzle(conn, *(window or (None, None)))
+        if row is None and window:
+            row = pick_random_puzzle(conn)
+    finally:
+        conn.close()
+    if row is None:
+        return JSONResponse({"error": "no puzzles imported"}, status_code=404)
+    return puzzle_position_payload(row, user)
+
+
+@router.post("/puzzles/rush/finish")
+async def puzzle_rush_finish(request: Request):
+    body = await request.json()
+    user = (body.get("practicingUser") or "").strip().lower()
+    try:
+        score = max(0, int(body.get("score") or 0))
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "invalid score"}, status_code=400)
+    if not user:
+        return JSONResponse({"error": "practicingUser is required"}, status_code=400)
+    conn = open_db(request.app.state.db_path)
+    try:
+        result = gamification.record_rush_score(conn, user, score)
+        gamification.evaluate_badges(conn, user)
+    finally:
+        conn.close()
+    return result
 
 
 @router.post("/puzzles/import")

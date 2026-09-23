@@ -160,6 +160,71 @@ CREATE TABLE IF NOT EXISTS puzzle_source_stats (
     updated_at   TEXT
 );
 
+-- Gamification (chess_tracker/gamification.py). All keyed by username, none
+-- with a FK to another table, same reasoning as practice_attempts.
+
+-- One row per player. current_streak can be stale until the next activity;
+-- gamification.get_streak() works out what to actually show.
+CREATE TABLE IF NOT EXISTS user_streaks (
+    username           TEXT PRIMARY KEY,
+    current_streak     INTEGER NOT NULL DEFAULT 0,
+    best_streak        INTEGER NOT NULL DEFAULT 0,
+    last_active_date   TEXT,                       -- YYYY-MM-DD, UTC
+    freeze_tokens      INTEGER NOT NULL DEFAULT 1, -- unused streak freezes
+    freeze_refill_week TEXT,                       -- ISO week last refilled, e.g. 2026-W39
+    updated_at         TEXT NOT NULL
+);
+
+-- Puzzle-derived half of the skill rating. theme '' is the overall rating.
+-- Updated live after every puzzle attempt.
+CREATE TABLE IF NOT EXISTS user_puzzle_ratings (
+    username     TEXT NOT NULL,
+    theme        TEXT NOT NULL DEFAULT '',
+    rating       REAL NOT NULL DEFAULT 1200,
+    puzzles_seen INTEGER NOT NULL DEFAULT 0,
+    updated_at   TEXT NOT NULL,
+    PRIMARY KEY (username, theme)
+);
+
+-- Game-derived half of the skill rating. theme '' is overall, otherwise
+-- opening/middlegame/endgame. Real games are replayed from scratch in
+-- chronological order (gamification.recompute_game_ratings) so backfills
+-- and reanalysis can't corrupt it; the two halves are only blended when read.
+CREATE TABLE IF NOT EXISTS user_game_ratings (
+    username   TEXT NOT NULL,
+    theme      TEXT NOT NULL DEFAULT '',
+    rating     REAL NOT NULL DEFAULT 1200,
+    games_seen INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (username, theme)
+);
+
+CREATE TABLE IF NOT EXISTS badges_earned (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    username   TEXT NOT NULL,
+    badge_code TEXT NOT NULL,
+    earned_at  TEXT NOT NULL,
+    UNIQUE (username, badge_code)
+);
+
+-- The lichess CSV's DailyDate column is not imported (puzzles has no such
+-- column), so "puzzle of the day" is simply the first random pick made for a
+-- date, remembered so everyone sees the same one.
+CREATE TABLE IF NOT EXISTS daily_puzzles (
+    date        TEXT PRIMARY KEY,
+    puzzle_id   TEXT NOT NULL,
+    assigned_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS puzzle_rush_scores (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    username   TEXT NOT NULL,
+    score      INTEGER NOT NULL,
+    duration_s INTEGER NOT NULL,
+    played_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_puzzle_rush_user ON puzzle_rush_scores(username);
+
 CREATE INDEX IF NOT EXISTS idx_mistakes_user ON mistakes(username);
 CREATE INDEX IF NOT EXISTS idx_mistakes_cat  ON mistakes(username, category);
 CREATE INDEX IF NOT EXISTS idx_games_user    ON games(username, end_time);
