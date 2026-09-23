@@ -18,6 +18,18 @@ a real account.*
 
 ---
 
+## Quick install
+
+One script does the whole setup (Python environment, the app, Stockfish) and then
+starts the web app. Running it again later just starts the app.
+
+- **Windows:** double-click `install.cmd`, or run `powershell -ExecutionPolicy Bypass -File install.ps1`
+- **macOS / Linux:** `bash install.sh`
+
+It needs Python 3.10 or newer already installed. Add `-NoLaunch` (Windows) or
+`--no-launch` (macOS / Linux) to set things up without starting the app. Prefer to
+do it by hand? The steps below are exactly what the script does.
+
 ## Setup (Windows)
 
 **1. Create an environment and install the tool**
