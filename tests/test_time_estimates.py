@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
+from chess_tracker.analysis_runner import DEFAULT_WORKERS
 from chess_tracker.db import open_db
 from chess_tracker.web.app import create_app
 from chess_tracker.web.jobs import (SECONDS_PER_GAME, estimate_seconds_per_game,
@@ -98,4 +99,5 @@ def test_progress_page_says_roughly_until_it_has_history(tmp_path):
     open_db(db_path).close()
     page = _progress_page(db_path)
     assert "parallel: false" in page and "serial: false" in page
-    assert "SECONDS_PER_GAME_PARALLEL = 3.75" in page
+    # The guess is spread over however many workers this machine gets.
+    assert f"SECONDS_PER_GAME_PARALLEL = {SECONDS_PER_GAME / DEFAULT_WORKERS}" in page
