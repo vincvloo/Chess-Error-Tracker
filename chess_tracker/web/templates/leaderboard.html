@@ -7,6 +7,7 @@
   <p class="muted">Players tracked on this computer who have practised, solved puzzles or earned
     badges. Rating blends puzzles and analysed games; nothing here leaves your machine.</p>
   {% if rows %}
+  <div class="scrollx">
   <table>
     <thead><tr><th>#</th><th>player</th><th>rating</th><th>streak</th><th>best streak</th>
       <th>badges</th><th>best rush</th></tr></thead>
@@ -24,6 +25,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <p class="muted">Nobody has any activity yet. Solve a puzzle or try a practice position to get on the board.</p>
   {% endif %}

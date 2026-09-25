@@ -3,27 +3,48 @@
 {% block title %}Achievements - Chess Error Tracker{% endblock %}
 {% block head %}
 <style>
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px;
+  margin: 4px 0 14px; }
+.tile { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--bg); }
+.tile .big { display: block; font-size: 30px; font-weight: 700; line-height: 1.1;
+  font-variant-numeric: tabular-nums; }
+.tile .lbl { display: block; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.tile.hot { border-color: var(--accent); background: var(--accent-soft); }
+@media (max-width: 480px) {
+  .tiles { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .tile { padding: 10px; }
+  .tile .big { font-size: 24px; }
+}
+.daystrip { display: flex; gap: 4px; margin: 6px 0 4px; }
+.daystrip span { flex: 1; max-width: 22px; height: 22px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--bg); }
+.daystrip span.on { background: var(--accent); border-color: var(--accent); }
+.daystrip span.today { outline: 2px solid var(--text); outline-offset: 1px; }
 .badgegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px;
   margin-top: 12px; }
 .badge { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12.5px;
   display: flex; flex-direction: column; gap: 2px; }
 .badge span { color: var(--muted); font-size: 11.5px; }
 .badge.earned { background: var(--accent-soft); border-color: var(--accent); }
-.badge.locked { opacity: 0.5; }
+.badge.locked { border-style: dashed; }
+.badge .bar { height: 5px; border-radius: 3px; background: var(--border); margin-top: 6px;
+  overflow: hidden; }
+.badge .bar i { display: block; height: 100%; background: var(--accent); }
+.badge .count { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 </style>
 {% endblock %}
 {% block content %}
 <div class="panel">
   <div class="backnav"><a href="/">&larr; Home</a></div>
   <div class="headerrow">
-    <h2>{{ username }}</h2>
+    <h2>Achievements</h2>
     {{ update_control(username, settings) }}
   </div>
   {% if empty %}
   <p class="muted">No stored games for {{ username }} yet — nothing to show here until you
     <a class="navlink" href="/">Analyse</a>.</p>
   {% else %}
-  <p class="muted">Based on your analysed games ({{ n_serious }} mistakes/blunders on record){%
+  <p class="muted">{{ username }} &middot; based on your analysed games ({{ n_serious }} mistakes/blunders on record){%
     if practice.overall.attempted %}, and {{ practice.overall.attempted }} practice attempts so far
     ({{ practice.overall.solved }} solved).{% else %}. Head over to
     <a class="navlink" href="/practice?users={{ username }}">Practice</a> to start working
@@ -33,25 +54,43 @@
 
 {% if not empty %}
 <div class="panel">
-  <h2>Streak &amp; badges</h2>
-  <p>
-    <b>{{ progress.streak.current }}</b>-day streak
-    <span class="muted">(best {{ progress.streak.best }}; {{ progress.streak.freezes }} freeze{{ '' if progress.streak.freezes == 1 else 's' }} left this week)</span>
-    {% if progress.streak.at_risk %}<span class="muted"> &mdash; practise today to keep it going.</span>{% endif %}
+  <h2>Streak &amp; rating</h2>
+  <div class="tiles">
+    <div class="tile{% if progress.streak.current %} hot{% endif %}">
+      <span class="big">{{ progress.streak.current }}</span>
+      <span class="lbl">day streak &middot; best {{ progress.streak.best }}</span>
+    </div>
+    <div class="tile" title="An estimate on a Chess.com-like scale. Everyone starts at 1200; it moves with every puzzle and analysed game.">
+      <span class="big">{% if progress.rating.overall %}{{ progress.rating.overall.rating }}{% else %}&ndash;{% endif %}</span>
+      <span class="lbl">skill rating (estimate)</span>
+    </div>
+    <div class="tile">
+      <span class="big">{% if progress.rush_best is not none %}{{ progress.rush_best }}{% else %}&ndash;{% endif %}</span>
+      <span class="lbl">best puzzle rush</span>
+    </div>
+  </div>
+  <div class="daystrip" role="img"
+       aria-label="Practised on {{ progress.activity | selectattr('active') | list | length }} of the last {{ progress.activity | length }} days">
+    {% for d in progress.activity %}<span class="{{ 'on' if d.active }}{{ ' today' if loop.last }}" title="{{ d.date }}"></span>{% endfor %}
+  </div>
+  <p class="muted" style="margin:4px 0 0">
+    Last {{ progress.activity | length }} days.
+    {{ progress.streak.freezes }} streak freeze{{ '' if progress.streak.freezes == 1 else 's' }} left this week.
+    {% if progress.streak.at_risk %}Practise today to keep your streak going.{% endif %}
+    {% if not progress.rating.overall %}Solve a puzzle or analyse some games to get a skill rating.{% endif %}
   </p>
-  {% if progress.rating.overall %}
-  <p>Skill rating <b>{{ progress.rating.overall.rating }}</b>
-    <span class="muted">(from puzzles and your analysed games)</span></p>
-  {% else %}
-  <p class="muted">No skill rating yet &mdash; solve a puzzle or analyse some games.</p>
-  {% endif %}
-  {% if progress.rush_best is not none %}<p class="muted">Best puzzle rush: {{ progress.rush_best }}</p>{% endif %}
+</div>
+
+<div class="panel">
+  <h2>Badges <span class="muted" style="font-weight:400">({{ progress.badges.earned | length }} of {{ progress.badges.earned | length + progress.badges.locked | length }})</span></h2>
   <div class="badgegrid">
     {% for b in progress.badges.earned %}
     <div class="badge earned"><b>{{ b.label }}</b><span>{{ b.description }}</span></div>
     {% endfor %}
     {% for b in progress.badges.locked %}
-    <div class="badge locked"><b>{{ b.label }}</b><span>{{ b.description }}</span></div>
+    <div class="badge locked"><b>{{ b.label }}</b><span>{{ b.description }}</span>
+      <div class="bar" aria-hidden="true"><i style="width: {{ (b.current / b.target * 100) | round | int }}%"></i></div>
+      <span class="count">{{ b.current }} / {{ b.target }}</span></div>
     {% endfor %}
   </div>
 </div>
@@ -168,7 +207,7 @@
 <div class="panel">
   <h2>Recent practice sessions</h2>
   {% if practice.recent %}
-  <table id="recentTable">
+  <div class="scrollx"><table id="recentTable">
     <thead><tr><th>when</th><th>category</th><th>source</th><th>result</th><th>hint</th><th></th></tr></thead>
     <tbody>
       {% for a in practice.recent %}
@@ -182,7 +221,7 @@
       </tr>
       {% endfor %}
     </tbody>
-  </table>
+  </table></div>
   <div class="btnrow">
     <button type="button" id="resetHistoryBtn" class="btn-secondary"
       style="color:var(--danger);border-color:var(--danger)">Reset practice history</button>

@@ -129,6 +129,26 @@ def get_streak(conn: sqlite3.Connection, username: str, today: date | None = Non
     }
 
 
+def activity_days(conn: sqlite3.Connection, username: str, days: int = 14,
+                  today: date | None = None) -> list[dict]:
+    """The last `days` days, oldest first, each {date, active}: whether the
+    player practised or solved/failed a puzzle that (UTC) day."""
+    today = today or _today()
+    first = (today - timedelta(days=days - 1)).isoformat()
+    username = username.lower()
+    active = {r[0] for r in conn.execute(
+        "SELECT substr(created_at, 1, 10) FROM practice_attempts "
+        "WHERE practicing_user = ? AND substr(created_at, 1, 10) >= ? "
+        "UNION SELECT substr(created_at, 1, 10) FROM puzzle_attempts "
+        "WHERE practicing_user = ? AND substr(created_at, 1, 10) >= ?",
+        (username, first, username, first))}
+    out = []
+    for i in range(days):
+        d = (today - timedelta(days=days - 1 - i)).isoformat()
+        out.append({"date": d, "active": d in active})
+    return out
+
+
 # --------------------------------------------------------------------------
 # Puzzle rating (live Elo-delta)
 # --------------------------------------------------------------------------
@@ -305,29 +325,31 @@ def smart_rating_window(conn: sqlite3.Connection, username: str) -> tuple[int, i
 # Badges
 # --------------------------------------------------------------------------
 
+# Each badge is "a stat reaching a target", which is also what lets the page
+# show progress toward the ones not earned yet.
 BADGE_DEFINITIONS = [
     {"code": "first_puzzle", "label": "First Steps", "description": "Solve your first puzzle",
-     "check": lambda s: s["puzzles_solved"] >= 1},
+     "stat": "puzzles_solved", "target": 1},
     {"code": "first_practice", "label": "Getting Started",
      "description": "Complete your first practice attempt",
-     "check": lambda s: s["practice_attempts"] >= 1},
+     "stat": "practice_attempts", "target": 1},
     {"code": "streak_7", "label": "Week Warrior", "description": "Reach a 7-day streak",
-     "check": lambda s: s["best_streak"] >= 7},
+     "stat": "best_streak", "target": 7},
     {"code": "streak_30", "label": "Monthly Habit", "description": "Reach a 30-day streak",
-     "check": lambda s: s["best_streak"] >= 30},
+     "stat": "best_streak", "target": 30},
     {"code": "streak_100", "label": "Iron Will", "description": "Reach a 100-day streak",
-     "check": lambda s: s["best_streak"] >= 100},
+     "stat": "best_streak", "target": 100},
     {"code": "puzzles_100", "label": "Puzzle Century", "description": "Solve 100 puzzles",
-     "check": lambda s: s["puzzles_solved"] >= 100},
+     "stat": "puzzles_solved", "target": 100},
     {"code": "puzzles_1000", "label": "Puzzle Grandmaster", "description": "Solve 1000 puzzles",
-     "check": lambda s: s["puzzles_solved"] >= 1000},
+     "stat": "puzzles_solved", "target": 1000},
     {"code": "no_hint_10", "label": "Sharp Eye",
      "description": "Solve 10 practice positions without a hint",
-     "check": lambda s: s["practice_no_hint"] >= 10},
+     "stat": "practice_no_hint", "target": 10},
     {"code": "rating_1500", "label": "Rising Star", "description": "Skill rating reaches 1500",
-     "check": lambda s: s["rating"] >= 1500},
+     "stat": "rating", "target": 1500},
     {"code": "rating_1800", "label": "Strong Player", "description": "Skill rating reaches 1800",
-     "check": lambda s: s["rating"] >= 1800},
+     "stat": "rating", "target": 1800},
 ]
 BADGES_BY_CODE = {b["code"]: b for b in BADGE_DEFINITIONS}
 
@@ -359,7 +381,7 @@ def evaluate_badges(conn: sqlite3.Connection, username: str) -> list[str]:
         "SELECT badge_code FROM badges_earned WHERE username = ?", (username,))}
     new = []
     for badge in BADGE_DEFINITIONS:
-        if badge["code"] not in earned and badge["check"](stats):
+        if badge["code"] not in earned and stats[badge["stat"]] >= badge["target"]:
             conn.execute("INSERT OR IGNORE INTO badges_earned (username, badge_code, earned_at) "
                          "VALUES (?, ?, ?)", (username, badge["code"], _now()))
             new.append(badge["code"])
@@ -368,17 +390,21 @@ def evaluate_badges(conn: sqlite3.Connection, username: str) -> list[str]:
 
 
 def get_badges(conn: sqlite3.Connection, username: str) -> dict:
-    """{"earned": [{code,label,description,earned_at}], "locked": [{code,label,description}]}"""
+    """{"earned": [{code,label,description,earned_at}],
+        "locked": [{code,label,description,current,target}]} -- `current` is
+    how far along the player is (capped at the target), for a progress bar."""
+    username = username.lower()
     rows = {r["badge_code"]: r["earned_at"] for r in conn.execute(
-        "SELECT badge_code, earned_at FROM badges_earned WHERE username = ?",
-        (username.lower(),))}
+        "SELECT badge_code, earned_at FROM badges_earned WHERE username = ?", (username,))}
+    stats = _badge_stats(conn, username)
     earned, locked = [], []
     for b in BADGE_DEFINITIONS:
         item = {"code": b["code"], "label": b["label"], "description": b["description"]}
         if b["code"] in rows:
             earned.append({**item, "earned_at": rows[b["code"]]})
         else:
-            locked.append(item)
+            locked.append({**item, "current": min(stats[b["stat"]], b["target"]),
+                           "target": b["target"]})
     earned.sort(key=lambda b: b["earned_at"])
     return {"earned": earned, "locked": locked}
 

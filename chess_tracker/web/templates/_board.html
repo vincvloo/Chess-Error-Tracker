@@ -36,6 +36,7 @@
 .sq.target::after { content: ""; position: absolute; width: 28%; height: 28%; border-radius: 50%;
   background: var(--accent); opacity: 0.55; }
 .sq.hint { outline: 3px solid #c9a227; outline-offset: -3px; }
+.sq:focus-visible { outline: 3px solid var(--text); outline-offset: -3px; }
 .sq.white-piece { color: #f5f5f5; text-shadow: 0 0 2px #000, 0 0 1px #000; }
 .sq.black-piece { color: #111; text-shadow: 0 0 2px #fff8, 0 0 1px #fff8; }
 .promo { display: none; justify-content: center; gap: 8px; margin: 10px 0; }
@@ -46,11 +47,12 @@
 
 {% macro board_markup() %}
 <div class="boardwrap">
-  <div class="ranks" id="ranks"></div>
-  <div class="board" id="board"></div>
-  <div class="files" id="files"></div>
+  <div class="ranks" id="ranks" aria-hidden="true"></div>
+  <div class="board" id="board" role="group"
+       aria-label="Chess board. Arrow keys move between squares, Enter or Space selects."></div>
+  <div class="files" id="files" aria-hidden="true"></div>
 </div>
-<div class="promo" id="promo">
+<div class="promo" id="promo" role="group" aria-label="Promote pawn to">
   <span class="muted">Promote to:</span>
   <button type="button" data-p="q">Q</button>
   <button type="button" data-p="r">R</button>
@@ -64,6 +66,10 @@
 const PIECE_GLYPH = {
   P: "♙", N: "♘", B: "♗", R: "♖", Q: "♕", K: "♔",
   p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
+};
+const PIECE_NAME = {
+  P: "white pawn", N: "white knight", B: "white bishop", R: "white rook", Q: "white queen", K: "white king",
+  p: "black pawn", n: "black knight", b: "black bishop", r: "black rook", q: "black queen", k: "black king",
 };
 const FILES = "abcdefgh".split("");
 
@@ -92,6 +98,7 @@ function sideToMove(fen) {
 
 let selected = null;
 let pendingTarget = null; // {from, to} awaiting a promotion choice
+let focusSquare = null;   // the board's single keyboard tab stop
 
 function squareEl(sq) {
   return document.querySelector('.sq[data-square="' + sq + '"]');
@@ -103,9 +110,23 @@ function clearHighlights() {
   });
 }
 
+// Screen-reader text for each square: what's on it, plus whether it's the
+// selected piece, a legal destination, or the hint square.
+function syncAria() {
+  document.querySelectorAll("#board .sq").forEach(el => {
+    const notes = [];
+    if (el.classList.contains("selected")) notes.push("selected");
+    if (el.classList.contains("target")) notes.push("legal move");
+    if (el.classList.contains("hint")) notes.push("hint: move this piece");
+    el.setAttribute("aria-label", el.dataset.base + (notes.length ? ", " + notes.join(", ") : ""));
+    el.setAttribute("aria-pressed", el.classList.contains("selected") ? "true" : "false");
+  });
+}
+
 function drawBoard(fen) {
   const board = parseFenBoard(fen);
   const boardEl = document.getElementById("board");
+  const hadFocus = boardEl.contains(document.activeElement);
   boardEl.innerHTML = "";
   const flip = boardColour === "black";
   const dispFiles = flip ? [...FILES].reverse() : FILES;
@@ -117,7 +138,10 @@ function drawBoard(fen) {
       const light = (FILES.indexOf(file) + rank) % 2 === 0;
       div.className = "sq " + (light ? "light" : "dark");
       div.dataset.square = sq;
+      div.setAttribute("role", "button");
+      div.tabIndex = -1;
       const piece = board[sq];
+      div.dataset.base = sq + ", " + (piece ? PIECE_NAME[piece] : "empty");
       if (piece) {
         div.textContent = PIECE_GLYPH[piece];
         div.classList.add(piece === piece.toUpperCase() ? "white-piece" : "black-piece");
@@ -126,6 +150,11 @@ function drawBoard(fen) {
       boardEl.appendChild(div);
     });
   });
+
+  const stop = boardEl.querySelector('.sq[data-square="' + focusSquare + '"]') || boardEl.firstElementChild;
+  stop.tabIndex = 0;
+  if (hadFocus) stop.focus();
+  syncAria();
 
   const ranksEl = document.getElementById("ranks");
   ranksEl.innerHTML = "";
@@ -143,7 +172,7 @@ function drawBoard(fen) {
   });
 }
 
-function onSquareClick(sq) {
+function handleSquareClick(sq) {
   if (isLocked()) return;
   const board = parseFenBoard(currentFen);
   const mover = sideToMove(currentFen);
@@ -193,11 +222,48 @@ function onSquareClick(sq) {
   if (candidates.length > 1) {
     pendingTarget = { from: selected, to: sq };
     document.getElementById("promo").classList.add("show");
+    document.querySelector("#promo button").focus();
     return;
   }
 
   onBoardMove(selected, sq, null);
 }
+
+function onSquareClick(sq) {
+  focusSquare = sq;
+  handleSquareClick(sq);
+  syncAria();
+}
+
+document.getElementById("board").addEventListener("keydown", e => {
+  const el = e.target.closest(".sq");
+  if (!el) return;
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    onSquareClick(el.dataset.square);
+    return;
+  }
+  if (e.key === "Escape") {
+    selected = null;
+    clearHighlights();
+    syncAria();
+    return;
+  }
+  // Arrow keys follow what's on screen (the board flips when you play Black).
+  const squares = Array.from(document.querySelectorAll("#board .sq"));
+  const i = squares.indexOf(el);
+  let j = i;
+  if (e.key === "ArrowRight" && i % 8 < 7) j = i + 1;
+  else if (e.key === "ArrowLeft" && i % 8 > 0) j = i - 1;
+  else if (e.key === "ArrowDown" && i + 8 < 64) j = i + 8;
+  else if (e.key === "ArrowUp" && i - 8 >= 0) j = i - 8;
+  else if (!e.key.startsWith("Arrow")) return;
+  e.preventDefault();
+  squares[i].tabIndex = -1;
+  squares[j].tabIndex = 0;
+  squares[j].focus();
+  focusSquare = squares[j].dataset.square;
+});
 
 document.getElementById("promo").addEventListener("click", e => {
   const btn = e.target.closest("button[data-p]");

@@ -13,9 +13,6 @@
 #feedback.alsofine { color: #c9a227; }
 #feedback.wrong { color: var(--danger); }
 #feedback.thinking { color: var(--muted); font-style: italic; }
-.badgetoast { display: none; margin: 10px 0; padding: 10px 12px; border-radius: 8px;
-  background: var(--accent-soft); font-size: 13px; }
-.badgetoast.show { display: block; }
 .practicenav { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; align-items: center; }
 .practicenav > * { margin-top: 0; }
 .ownertag { font-weight: 600; color: var(--accent); }
@@ -38,10 +35,8 @@
 {% elif pickCategory %}
 <div class="panel">
   <div class="backnav"><a href="/">&larr; Home</a></div>
-  <div class="headerrow">
-    <h2>{{ username }} &mdash; what do you want to work on?</h2>
-    {{ update_control(username, settings) }}
-  </div>
+  <h2>Practice &mdash; what do you want to work on?</h2>
+  <p class="muted" style="margin-top:-6px">Replay your own mistakes, {{ username }}. Pick the kind you want to fix.</p>
   {% if categories %}
   <table>
     <thead><tr><th>category</th><th>count</th><th></th></tr></thead>
@@ -67,21 +62,20 @@
       <a href="/">&larr; Home</a> &middot;
       <a href="/practice?users={{ username }}&tc={{ data.tc|default('') }}&phase={{ data.phaseFilter|default('') }}">Change category</a>
     </span>
-    {{ update_control(username, settings) }}
   </div>
   <div class="practicehead">
     <div>
       <h2 style="margin:0">{{ username }} &mdash; position {{ data.queuePosition }} of {{ data.queueTotal }}</h2>
       <div class="muted">move {{ data.moveNumber }}, {{ data.phase }}, {{ data.colour }} to move
-        &middot; -{{ data.cpLoss }}cp &middot; {{ data.category }}
+        &middot; {% if data.cpLoss >= 1000 %}decisive{% else %}-{{ data.cpLoss }}cp{% endif %} &middot; {{ data.category }}
         {% if data.owner != username %} &middot; <span class="ownertag">@{{ data.owner }}</span>{% endif %}</div>
     </div>
     <a class="navlink" href="{{ data.gameUrl }}" target="_blank" rel="noopener noreferrer">View game &#8599;</a>
   </div>
 
   {{ board_markup() }}
-  <div id="feedback"></div>
-  <div id="badgeToast" class="badgetoast"></div>
+  <div id="feedback" role="status" aria-live="polite"></div>
+  <div id="badgeToast" class="badgetoast" role="status" aria-live="polite"></div>
 
   <div class="practicenav">
     <button type="button" id="resetBtn" class="btn-secondary">Try again</button>
@@ -134,11 +128,7 @@ async function submitAttempt(from, to, promotion) {
     return;
   }
 
-  if (result.newBadges && result.newBadges.length) {
-    const toast = document.getElementById("badgeToast");
-    toast.textContent = result.newBadges.map(b => "Badge earned: " + b.label + " — " + b.description).join("  ");
-    toast.classList.add("show");
-  }
+  showBadgeToast(result.newBadges, document.getElementById("badgeToast"));
 
   const hintNote = hintUsed ? " (hint used)" : "";
   if (result.verdict === "best") {
@@ -185,6 +175,7 @@ document.getElementById("hintBtn").addEventListener("click", async () => {
   selected = null;
   const sqEl = squareEl(result.square);
   if (sqEl) sqEl.classList.add("hint");
+  syncAria();
   const feedback = document.getElementById("feedback");
   feedback.textContent = "Hint: move the " + (result.piece || "piece") + " on " + result.square + ".";
   feedback.className = "thinking";

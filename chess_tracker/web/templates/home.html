@@ -65,27 +65,33 @@
   <p class="muted">Not analysed yet — hit Update above to fetch and analyse your games.</p>
   {% endif %}
 
+  <div class="sectiontitle">Train</div>
   <div class="actions">
+    <a class="actioncard actioncard-wide" href="/puzzles/daily?users={{ primary_user }}">
+      Today's puzzle<span class="sub">one new puzzle a day &middot; keeps your streak going</span></a>
     <a class="actioncard" href="/practice?users={{ primary_user }}">
-      Practice<span class="sub">try a mistake again</span></a>
-    <a class="actioncard" href="/achievements?users={{ primary_user }}">
-      Achievements<span class="sub">how you've improved</span></a>
-    <a class="actioncard" href="/play?users={{ primary_user }}">
-      Play<span class="sub">a full game vs. the bot</span></a>
+      Practice<span class="sub">retry your own mistakes</span></a>
     <a class="actioncard" href="/puzzles?users={{ primary_user }}">
-      Puzzles<span class="sub">Lichess tactics training</span></a>
-    <a class="actioncard" href="/puzzles/daily?users={{ primary_user }}">
-      Daily puzzle<span class="sub">one new puzzle a day</span></a>
-    <a class="actioncard" href="/leaderboard">
-      Leaderboard<span class="sub">compare tracked players</span></a>
-    <a class="actioncard actioncard-wide" href="/dashboard?users={{ primary_user }}">
+      Puzzles<span class="sub">free practice, rush &amp; filters</span></a>
+    <a class="actioncard actioncard-wide" href="/play?users={{ primary_user }}">
+      Play<span class="sub">a full game vs. the bot</span></a>
+  </div>
+
+  <div class="sectiontitle">Your progress</div>
+  <div class="actions">
+    <a class="actioncard" href="/achievements?users={{ primary_user }}">
+      Achievements<span class="sub">streak, rating &amp; badges</span></a>
+    <a class="actioncard" href="/dashboard?users={{ primary_user }}">
       Dashboard<span class="sub">full stats &amp; filters</span></a>
+    <a class="actioncard actioncard-wide" href="/leaderboard">
+      Leaderboard<span class="sub">compare the players tracked here</span></a>
   </div>
 </div>
 
 <div class="panel">
   <h2>Other tracked players</h2>
   {% if others %}
+  <div class="scrollx">
   <table>
     <thead><tr><th></th><th>User</th><th>Games</th><th>Err/100</th><th></th></tr></thead>
     <tbody>
@@ -101,6 +107,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   <div class="btnrow">
     <button type="button" id="compareBtn" class="btn-secondary" disabled>Compare selected with {{ primary_user }}</button>
   </div>

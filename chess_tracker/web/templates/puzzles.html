@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% from "_update_control.html" import update_control %}
 {% from "_board.html" import board_styles, board_markup, board_script %}
 {% block title %}Puzzles - Chess Error Tracker{% endblock %}
 {% block head %}
@@ -16,32 +15,38 @@
 .themegrid label { display: flex; align-items: center; gap: 4px; color: var(--text); margin: 0; }
 .themegrid input { width: auto; }
 .puzzlehead { font-size: 12.5px; margin: 14px 0 10px; }
-.modelinks { font-size: 12.5px; margin: 0 0 12px; }
-.modelinks a.current { font-weight: 600; text-decoration: none; color: var(--text); }
+.modetabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 14px; }
+.modetabs a { padding: 6px 14px; border-radius: 999px; border: 1px solid var(--border);
+  font-size: 13px; text-decoration: none; color: var(--text); }
+.modetabs a:hover { border-color: var(--accent); color: var(--accent); }
+.modetabs a[aria-current="page"] { background: var(--accent); border-color: var(--accent);
+  color: var(--on-accent); font-weight: 600; }
+details.filters { margin: 0 0 14px; border: 1px solid var(--border); border-radius: 8px;
+  padding: 0 12px; }
+details.filters summary { cursor: pointer; padding: 10px 0; font-size: 13px; }
+details.filters[open] summary { border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+details.filters form { padding-bottom: 12px; }
 .rushbar { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin: 12px 0;
   font-size: 14px; }
 .rushbar b { font-variant-numeric: tabular-nums; }
 .rushbar button { margin-top: 0; }
-.badgetoast { display: none; margin: 10px 0; padding: 10px 12px; border-radius: 8px;
-  background: var(--accent-soft); font-size: 13px; }
-.badgetoast.show { display: block; }
 </style>
 {% endblock %}
 {% block content %}
 <div class="panel">
   <div class="backnav"><a href="/">&larr; Home</a></div>
-  <div class="headerrow">
-    <h2>{{ username }} &mdash; puzzles</h2>
-    {{ update_control(username, settings) }}
-  </div>
+  <h2>Puzzles</h2>
 
-  <div class="modelinks">
-    <a href="/puzzles?users={{ username }}" {% if mode == 'normal' %}class="current"{% endif %}>Free practice</a> &middot;
-    <a href="/puzzles/daily?users={{ username }}" {% if mode == 'daily' %}class="current"{% endif %}>Daily puzzle</a> &middot;
-    <a href="/puzzles/rush?users={{ username }}" {% if mode == 'rush' %}class="current"{% endif %}>Puzzle rush</a>
-  </div>
+  <nav class="modetabs" aria-label="Puzzle mode">
+    <a href="/puzzles?users={{ username }}"{% if mode == 'normal' %} aria-current="page"{% endif %}>Free practice</a>
+    <a href="/puzzles/daily?users={{ username }}"{% if mode == 'daily' %} aria-current="page"{% endif %}>Daily puzzle</a>
+    <a href="/puzzles/rush?users={{ username }}"{% if mode == 'rush' %} aria-current="page"{% endif %}>Puzzle rush</a>
+  </nav>
 
   {% if mode == 'normal' %}
+  <details class="filters"{% if not found %} open{% endif %}>
+    <summary>Filters: rating {{ minRating }}&ndash;{{ maxRating }},
+      {% if themes %}{{ themes | length }} theme{{ '' if themes | length == 1 else 's' }}{% else %}any theme{% endif %}</summary>
   {% if smartRange %}
   <p class="muted" style="font-size:12.5px;">Rating range pre-filled from your skill rating.</p>
   {% endif %}
@@ -70,6 +75,7 @@
     {% endfor %}
     <button type="submit">New puzzle</button>
   </form>
+  </details>
   {% endif %}
 
   {% if not found %}
@@ -105,8 +111,8 @@
     {% if data.themes %} &middot; {{ data.themes | join(', ') }}{% endif %}
   </div>
   {{ board_markup() }}
-  <div id="feedback"></div>
-  <div id="badgeToast" class="badgetoast"></div>
+  <div id="feedback" role="status" aria-live="polite"></div>
+  <div id="badgeToast" class="badgetoast" role="status" aria-live="polite"></div>
   {% endif %}
 </div>
 
@@ -193,15 +199,7 @@ function isLocked() { return attempted || sideToMove(currentFen) !== boardColour
 function onBoardMove(from, to, promotion) { return submitAttempt(from, to, promotion); }
 
 function showBadges(badges) {
-  if (!badges || !badges.length) return;
-  const el = document.getElementById("badgeToast");
-  el.textContent = "";
-  badges.forEach(b => {
-    const line = document.createElement("div");
-    line.textContent = "Badge earned: " + b.label + " — " + b.description;
-    el.appendChild(line);
-  });
-  el.classList.add("show");
+  showBadgeToast(badges, document.getElementById("badgeToast"));
 }
 
 function fmtTime(s) {

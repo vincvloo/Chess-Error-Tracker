@@ -8,19 +8,27 @@
 :root {
   --bg: #f7f7f8; --panel: #ffffff; --border: #e2e2e6; --text: #1c1c1f;
   --muted: #6b6b74; --accent: #3f6fd6; --accent-soft: #e8edfb;
-  --danger: #c1507a; --danger-soft: #fbe8ee;
+  --danger: #c1507a; --danger-soft: #fbe8ee; --on-accent: #ffffff;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #17181c; --panel: #1f2024; --border: #313238; --text: #ececef;
     --muted: #9a9aa2; --accent: #7da2ff; --accent-soft: #263252;
-    --danger: #e08aa8; --danger-soft: #3a2530;
+    --danger: #e08aa8; --danger-soft: #3a2530; --on-accent: #0e1526;
   }
 }
 * { box-sizing: border-box; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input:focus-visible, select:focus-visible { outline-offset: 0; }
 body { margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
-header { padding: 20px 24px 8px; }
+header { padding: 20px 24px 8px; max-width: 808px; margin: 0 auto; }
+.mainnav { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 10px 0 0; }
+.mainnav a { padding: 5px 11px; border-radius: 999px; font-size: 13px; color: var(--muted);
+  text-decoration: none; border: 1px solid transparent; }
+.mainnav a:hover { color: var(--accent); border-color: var(--border); }
+.mainnav a[aria-current="page"] { color: var(--text); background: var(--panel);
+  border-color: var(--border); font-weight: 600; }
 #stickyProgress { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel);
   border-top: 1px solid var(--border); padding: 8px 16px; display: none;
   align-items: center; gap: 10px; font-size: 12.5px; text-decoration: none; color: var(--text); }
@@ -32,7 +40,8 @@ header { padding: 20px 24px 8px; }
 #stickyProgress .pct { color: var(--muted); min-width: 3em; text-align: right; }
 h1 { font-size: 20px; margin: 0 0 2px; }
 h1 a { color: inherit; text-decoration: none; }
-main { padding: 16px 24px 56px; max-width: 760px; }
+main { padding: 16px 24px 64px; max-width: 808px; margin: 0 auto; }
+.scrollx { overflow-x: auto; }
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   padding: 16px 18px; margin-bottom: 16px; }
 h2 { font-size: 15px; margin: 0 0 12px; }
@@ -52,7 +61,7 @@ button, .btn, .btn-secondary { font: inherit; padding: 9px 18px; border-radius: 
   border: 1px solid transparent; cursor: pointer; font-weight: 600; font-size: 13.5px;
   text-decoration: none; display: inline-flex; align-items: center; justify-content: center;
   line-height: 1.2; white-space: nowrap; }
-button, .btn { background: var(--accent); color: #fff; }
+button, .btn { background: var(--accent); color: var(--on-accent); }
 button:hover, .btn:hover { opacity: 0.9; }
 button:disabled, .btn:disabled { opacity: 0.5; cursor: default; }
 button { margin-top: 14px; }
@@ -78,13 +87,46 @@ a.button-link { display: inline-block; margin-top: 4px; font-size: 12.5px; color
 .actioncard:hover { opacity: 1; border-color: var(--accent); color: var(--accent); }
 .actioncard .sub { display: block; font-weight: 400; color: var(--muted); font-size: 11.5px;
   margin-top: 3px; }
+.sectiontitle { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--muted); margin: 14px 0 6px; }
+@media (max-width: 480px) {
+  header { padding: 14px 12px 6px; }
+  main { padding: 12px 10px 72px; }
+  .panel { padding: 14px 12px; }
+  .mainnav { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-right: -12px; }
+  .mainnav a { white-space: nowrap; }
+}
+@media (max-width: 480px), (pointer: coarse) {
+  button, .btn, .btn-secondary { min-height: 44px; }
+  .mainnav a { padding: 9px 12px; }
+}
+/* Badge-earned toast, shared by every page that can award one. */
+.badgetoast { display: none; margin: 10px 0; padding: 10px 14px; border-radius: 8px;
+  background: var(--accent-soft); border: 1px solid var(--accent); font-size: 13px; }
+.badgetoast.show { display: block; animation: badgepop .35s ease-out; }
+.badgetoast b { display: block; }
+@keyframes badgepop { from { transform: scale(.96); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .badgetoast.show { animation: none; } }
 </style>
 {% block head %}{% endblock %}
 </head>
 <body>
-<header class="headerrow">
-  <h1><a href="/">Chess Error Tracker</a></h1>
-  <a class="navlink" href="/settings">Settings</a>
+<header>
+  <div class="headerrow">
+    <h1><a href="/">Chess Error Tracker</a></h1>
+    <a class="navlink" href="/settings">Settings</a>
+  </div>
+  {% if settings and settings.primary_user %}
+  {% set path = request.url.path %}
+  <nav class="mainnav" aria-label="Main">
+    <a href="/"{% if path == '/' %} aria-current="page"{% endif %}>Home</a>
+    <a href="/practice"{% if path.startswith('/practice') %} aria-current="page"{% endif %}>Practice</a>
+    <a href="/puzzles"{% if path.startswith('/puzzles') %} aria-current="page"{% endif %}>Puzzles</a>
+    <a href="/play"{% if path.startswith('/play') %} aria-current="page"{% endif %}>Play</a>
+    <a href="/achievements"{% if path.startswith('/achievements') %} aria-current="page"{% endif %}>Achievements</a>
+    <a href="/leaderboard"{% if path.startswith('/leaderboard') %} aria-current="page"{% endif %}>Leaderboard</a>
+  </nav>
+  {% endif %}
 </header>
 <main>
 {% block content %}{% endblock %}
@@ -94,6 +136,22 @@ a.button-link { display: inline-block; margin-top: 4px; font-size: 12.5px; color
   <span class="track"><span class="fill" id="stickyProgressFill"></span></span>
   <span class="pct" id="stickyProgressPct"></span>
 </a>
+<script>
+// Shows "badge earned" lines in a .badgetoast element; no-op with nothing to show.
+function showBadgeToast(badges, el) {
+  if (!badges || !badges.length || !el) return;
+  el.textContent = "";
+  badges.forEach(function (b) {
+    var line = document.createElement("div");
+    var name = document.createElement("b");
+    name.textContent = "Badge earned: " + b.label;
+    line.appendChild(name);
+    line.appendChild(document.createTextNode(b.description));
+    el.appendChild(line);
+  });
+  el.classList.add("show");
+}
+</script>
 <script>
 (function () {
   var bar = document.getElementById("stickyProgress");
