@@ -15,6 +15,7 @@ the JobStatus dict below, behind a Lock.
 
 from __future__ import annotations
 
+import statistics
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -34,6 +35,64 @@ class JobAlreadyRunningError(Exception):
 # The estimate every "how long will this take" figure in the app is built
 # from -- see analysis_runner's own 20-40s/game note; 30 sits in the middle.
 SECONDS_PER_GAME = 30
+
+# Runs this small are dominated by fixed overhead (fetching, engine start-up),
+# not per-game analysis time, so they say little about big-batch speed.
+MIN_CALIBRATION_GAMES = 3
+# How many of the most recent matching runs the measured speed is drawn from.
+# Few on purpose: analysis has got much faster over time (the worker pool),
+# so old runs would drag the estimate far above what it does today.
+CALIBRATION_RUNS = 5
+
+
+def _run_seconds(started_at: str | None, finished_at: str | None) -> float | None:
+    try:
+        return (datetime.fromisoformat(finished_at) - datetime.fromisoformat(started_at)
+                ).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def measured_seconds_per_game(conn, depth: int, parallel_threshold: int) -> tuple[float | None, float | None]:
+    """
+    Wall-clock seconds per game actually achieved on this machine, from the
+    `runs` table every analysis run already writes -- as (serial, parallel).
+    Batches of `parallel_threshold` games or more run across the worker pool
+    and are much faster per game than smaller serial ones, so the two are
+    measured separately. Only runs at the same search depth count (time per
+    game scales with it). None where there's no usable history yet.
+    """
+    rows = conn.execute(
+        "SELECT started_at, finished_at, games_new FROM runs "
+        "WHERE depth = ? AND games_new >= ? ORDER BY id DESC",
+        (depth, MIN_CALIBRATION_GAMES)).fetchall()
+
+    def measure(matching):
+        # The median of each recent run's own per-game speed, so a single
+        # freak run (a laptop asleep mid-analysis, say) can't skew it.
+        per_game = []
+        for r in matching[:CALIBRATION_RUNS]:
+            seconds = _run_seconds(r["started_at"], r["finished_at"])
+            if seconds is not None and seconds > 0:
+                per_game.append(seconds / r["games_new"])
+        return statistics.median(per_game) if per_game else None
+
+    return (measure([r for r in rows if r["games_new"] < parallel_threshold]),
+            measure([r for r in rows if r["games_new"] >= parallel_threshold]))
+
+
+def estimate_seconds_per_game(conn, depth: int, parallel_threshold: int, workers: int) -> dict:
+    """What the progress page should assume per game: this machine's own
+    measured speed where there is history, else the fixed guess (spread across
+    the workers for a parallel-sized batch). `*Measured` says which it is, so
+    the page can be honest that a guess is a guess."""
+    serial, parallel = measured_seconds_per_game(conn, depth, parallel_threshold)
+    return {
+        "serial": serial if serial is not None else SECONDS_PER_GAME,
+        "parallel": parallel if parallel is not None else SECONDS_PER_GAME / max(workers, 1),
+        "serialMeasured": serial is not None,
+        "parallelMeasured": parallel is not None,
+    }
 
 # Caps the very first analysis run so onboarding doesn't leave someone
 # staring at a progress bar through their whole game history. Matches
