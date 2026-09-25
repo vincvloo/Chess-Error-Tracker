@@ -78,7 +78,8 @@ def test_achievements_page_shows_streak_badges_and_theme_ratings(tmp_path):
     client.post("/api/puzzles/aaaaa/attempt", json=SOLVE)
     r = client.get("/achievements", params={"users": "alice"})
     assert r.status_code == 200
-    assert "Streak &amp; badges" in r.text
+    assert "Streak &amp; rating" in r.text
+    assert "Badges" in r.text
     assert "First Steps" in r.text
     assert "Rating by theme" in r.text
     assert "Back-rank mate" in r.text
@@ -87,7 +88,7 @@ def test_achievements_page_shows_streak_badges_and_theme_ratings(tmp_path):
 def test_achievements_page_renders_with_no_gamification_activity(tmp_path):
     r = TestClient(create_app(_seeded_db(tmp_path))).get("/achievements", params={"users": "alice"})
     assert r.status_code == 200
-    assert "No skill rating yet" in r.text
+    assert "to get a skill rating" in r.text
 
 
 def test_leaderboard_shows_only_active_players(tmp_path):

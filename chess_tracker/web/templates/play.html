@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% from "_update_control.html" import update_control %}
 {% from "_board.html" import board_styles, board_markup, board_script %}
 {% block title %}Play - Chess Error Tracker{% endblock %}
 {% block head %}
@@ -16,10 +15,7 @@
 {% block content %}
 <div class="panel">
   <div class="backnav"><a href="/">&larr; Home</a></div>
-  <div class="headerrow">
-    <h2>{{ username }} &mdash; play</h2>
-    {{ update_control(username, settings) }}
-  </div>
+  <h2>Play against the bot</h2>
   <div class="row">
     <div>
       <label for="engineSelect">Engine</label>
@@ -43,7 +39,7 @@
   </div>
   <div class="row">
     <div>
-      <label for="tcSelect">Time class (for adaptive steering)</label>
+      <label for="tcSelect">Game speed (for adaptive play)</label>
       <select id="tcSelect">
         {% for tc in time_classes %}<option value="{{ tc }}">{{ tc }}</option>{% endfor %}
       </select>
@@ -61,10 +57,11 @@
 
   <div id="boardPanel" style="display:none; margin-top:16px;">
     {{ board_markup() }}
-    <div id="status"></div>
+    <div id="status" role="status" aria-live="polite"></div>
     <div id="analyzeSection" style="display:none; margin-top:14px;">
       <button type="button" id="analyzeBtn" class="btn-secondary">Analyze this game</button>
       <div id="analyzeResult"></div>
+      <div id="badgeToast" class="badgetoast" role="status" aria-live="polite"></div>
     </div>
   </div>
 </div>
@@ -175,6 +172,7 @@ async function startGame() {
   document.getElementById("boardPanel").style.display = "";
   document.getElementById("analyzeSection").style.display = "none";
   document.getElementById("analyzeResult").innerHTML = "";
+  document.getElementById("badgeToast").classList.remove("show");
   document.getElementById("analyzeBtn").disabled = false;
   const status = document.getElementById("status");
   status.className = "";
@@ -212,10 +210,12 @@ function updateAdaptiveAvailability() {
   cb.disabled = cats.length === 0;
   if (cats.length === 0) {
     cb.checked = false;
-    note.textContent = tc ? ("Not enough analysed mistakes yet for " + tc + ".") : "";
+    note.title = "";
+    note.textContent = tc ? ("Not enough analysed " + tc + " games yet to steer the bot.") : "";
   } else {
-    note.textContent = cats.length + " eligible categor" + (cats.length === 1 ? "y" : "ies")
-      + ": " + cats.join(", ");
+    note.textContent = "Steers the bot toward the mistakes you make most (" + cats.length
+      + " kind" + (cats.length === 1 ? "" : "s") + " with enough data).";
+    note.title = cats.join(", ");
   }
 }
 document.getElementById("tcSelect").addEventListener("change", updateAdaptiveAvailability);
@@ -249,6 +249,9 @@ function updateEloForEngine() {
 document.getElementById("engineSelect").addEventListener("change", updateEloForEngine);
 document.getElementById("eloInput").addEventListener("input", updateEloNote);
 
+// Forced-mate blunders are capped at a huge internal number; say "decisive" instead.
+function fmtLoss(cp) { return cp >= 1000 ? "decisive" : "−" + cp + "cp"; }
+
 const SEVERITY_LABEL = { blunder: "blunders", mistake: "mistakes", inaccuracy: "inaccuracies" };
 
 function renderAnalysis(data) {
@@ -274,14 +277,14 @@ function renderAnalysis(data) {
     + ') out of ' + data.totalMoves + ' plies. Click a row to see that position on the board.'
     + ' <a href="#" id="backToFinalLink">Back to final position</a></p>';
   html += '<table><thead><tr><th>move</th><th>phase</th><th>you played</th>'
-    + '<th>best</th><th>-cp</th><th>category</th></tr></thead><tbody>';
+    + '<th>best</th><th>loss</th><th>category</th></tr></thead><tbody>';
   data.mistakes.forEach((m, i) => {
     html += '<tr class="reviewrow" data-index="' + i + '"><td>' + m.move_number + '</td><td>'
-      + m.phase + '</td><td>' + m.played + '</td><td>' + m.best + '</td><td>' + m.cp_loss
+      + m.phase + '</td><td>' + m.played + '</td><td>' + m.best + '</td><td>' + fmtLoss(m.cp_loss)
       + '</td><td>' + m.category + '</td></tr>';
   });
   html += '</tbody></table>';
-  el.innerHTML = html;
+  el.innerHTML = '<div class="scrollx">' + html + '</div>';
 
   el.querySelectorAll("tr.reviewrow").forEach(row => {
     row.addEventListener("click", () => reviewMistake(parseInt(row.dataset.index, 10)));
@@ -298,7 +301,7 @@ function reviewMistake(index) {
   drawBoard(m.fen);
   const status = document.getElementById("status");
   status.textContent = "Move " + m.move_number + " (" + m.phase + "): you played " + m.played
-    + ", engine's best was " + m.best + " (−" + m.cp_loss + "cp).";
+    + ", engine's best was " + m.best + " (" + fmtLoss(m.cp_loss) + ").";
   status.className = "";
   document.querySelectorAll("#analyzeResult tr.reviewrow").forEach(el => el.classList.remove("selected-row"));
   const row = document.querySelector('#analyzeResult tr[data-index="' + index + '"]');
@@ -329,11 +332,7 @@ document.getElementById("analyzeBtn").addEventListener("click", async () => {
     // Each analysis nudges the skill rating once, so it can only be run
     // once per game (startGame() re-enables it).
     if (data.error) btn.disabled = false;
-    if (data.newBadges && data.newBadges.length) {
-      const note = document.createElement("p");
-      note.textContent = data.newBadges.map(b => "Badge earned: " + b.label + " — " + b.description).join("  ");
-      el.prepend(note);
-    }
+    showBadgeToast(data.newBadges, document.getElementById("badgeToast"));
   } catch (e) {
     btn.disabled = false;
     throw e;

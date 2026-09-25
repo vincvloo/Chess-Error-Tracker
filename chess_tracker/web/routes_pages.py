@@ -241,6 +241,7 @@ def achievements_page(request: Request, users: str = ""):
                 "badges": gamification.get_badges(conn, user),
                 "rating": gamification.get_skill_rating(conn, user),
                 "rush_best": gamification.best_rush_score(conn, user),
+                "activity": gamification.activity_days(conn, user),
             }
     finally:
         conn.close()
