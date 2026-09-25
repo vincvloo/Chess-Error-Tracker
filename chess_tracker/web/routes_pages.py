@@ -22,8 +22,8 @@ from ..puzzles import (DEFAULT_MAX_RATING, DEFAULT_MIN_RATING, THEME_GROUPS,
 from ..reports import (adaptive_eligible_categories, practice_pool, practice_queue,
                        practice_stats, report_model, user_summaries)
 from .demo_data import render_demo_dashboard_html
-from .jobs import (BIG_UPDATE_THRESHOLD, FIRST_RUN_GAME_LIMIT, SECONDS_PER_GAME,
-                   JobAlreadyRunningError)
+from .jobs import (BIG_UPDATE_THRESHOLD, FIRST_RUN_GAME_LIMIT, JobAlreadyRunningError,
+                   estimate_seconds_per_game)
 
 router = APIRouter()
 TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
@@ -187,12 +187,13 @@ def job_progress_page(request: Request, job_id: str):
     conn = open_db(request.app.state.db_path)
     try:
         settings = get_settings(conn)
+        speed = estimate_seconds_per_game(
+            conn, settings["depth"], DEFAULT_PARALLEL_THRESHOLD, DEFAULT_WORKERS)
     finally:
         conn.close()
     return templates.TemplateResponse(request, "progress.html", {
         "job_id": job_id, "users": status["users"], "settings": settings,
-        "big_update_threshold": BIG_UPDATE_THRESHOLD,
-        "seconds_per_game": SECONDS_PER_GAME,
+        "big_update_threshold": BIG_UPDATE_THRESHOLD, "speed": speed,
         "parallel_threshold": DEFAULT_PARALLEL_THRESHOLD, "workers": DEFAULT_WORKERS,
     })
 

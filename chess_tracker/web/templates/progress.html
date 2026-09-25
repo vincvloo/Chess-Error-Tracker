@@ -46,21 +46,31 @@ const jobId = {{ job_id|tojson }};
 const bigUpdateThreshold = {{ big_update_threshold }};
 const jobUsers = {{ users|tojson }};
 const jobDepth = {{ settings.depth }};
-// A rough, fixed estimate (matches the reasoning behind FIRST_RUN_GAME_LIMIT/
-// BIG_UPDATE_THRESHOLD) -- used only before this job has produced any real
-// progress to measure a rate from; see estimateRemainingSeconds() below for
-// the live version once it has.
-const SECONDS_PER_GAME = {{ seconds_per_game }};
-// A batch above this size splits across PARALLEL_WORKERS processes instead
-// of running one game at a time -- matches analysis_runner's own
-// parallel_threshold/workers for a plain (non-onboarding) job, which is
-// what narrowing the date range here would actually start.
+// Wall-clock seconds per game for a batch of each kind, used before this job
+// has produced any real progress to measure a rate from (see
+// estimateRemainingLabel() below for the live version once it has). Taken
+// from this machine's own past runs where there are any; otherwise a fixed
+// guess (already spread across the workers for the parallel case).
+const SECONDS_PER_GAME_SERIAL = {{ speed.serial|tojson }};
+const SECONDS_PER_GAME_PARALLEL = {{ speed.parallel|tojson }};
+const SPEED_MEASURED = { serial: {{ speed.serialMeasured|tojson }}, parallel: {{ speed.parallelMeasured|tojson }} };
+// A batch of this size or more splits across the worker pool instead of
+// running one game at a time -- matches analysis_runner's own
+// parallel_threshold for a plain (non-onboarding) job, which is what
+// narrowing the date range here would actually start.
 const PARALLEL_THRESHOLD = {{ parallel_threshold }};
-const PARALLEL_WORKERS = {{ workers }};
+
+function isParallelSized(games) { return games >= PARALLEL_THRESHOLD; }
 
 function estimateSecondsFor(games) {
-  const rate = games >= PARALLEL_THRESHOLD ? PARALLEL_WORKERS : 1;
-  return Math.ceil(games * SECONDS_PER_GAME / rate);
+  return Math.ceil(games * (isParallelSized(games) ? SECONDS_PER_GAME_PARALLEL : SECONDS_PER_GAME_SERIAL));
+}
+
+// "about 12 minutes" when it's this machine's own measured speed, "roughly
+// ..." when it's still the built-in guess (no past run to learn from yet).
+function estimateWording(games) {
+  const measured = isParallelSized(games) ? SPEED_MEASURED.parallel : SPEED_MEASURED.serial;
+  return measured ? "about" : "roughly";
 }
 
 let bigUpdateShown = false;
@@ -103,11 +113,13 @@ const narrowSubmitBtn = document.getElementById("narrowSubmitBtn");
 async function showBigUpdatePanel(currentUser, currentTotal) {
   bigUpdateShown = true;
   const estimate = formatDuration(Math.max(1, Math.round(estimateSecondsFor(currentTotal) / 60)));
+  const wording = estimateWording(currentTotal);
+  const firstGuess = wording === "roughly" ? " (a first guess -- it gets accurate after your first update)" : "";
   document.getElementById("bigUpdateNote").textContent = jobUsers.length > 1
-    ? currentUser + " needs " + currentTotal + " games analysed — about " + estimate +
-      ". Narrowing the date range below applies to this whole update, all " + jobUsers.length +
-      " players, not just " + currentUser + "."
-    : currentTotal + " games need analysis — about " + estimate + ".";
+    ? currentUser + " needs " + currentTotal + " games analysed — " + wording + " " + estimate +
+      firstGuess + ". Narrowing the date range below applies to this whole update, all " +
+      jobUsers.length + " players, not just " + currentUser + "."
+    : currentTotal + " games need analysis — " + wording + " " + estimate + firstGuess + ".";
   bigUpdatePanel.style.display = "";
 
   try {
@@ -168,7 +180,7 @@ function updateSinceLabel() {
   const minutes = Math.max(1, Math.round(estimateSecondsFor(games) / 60));
   sinceInput.value = month;
   sinceLabel.textContent = month + " → today: ~" + games + " game" + (games === 1 ? "" : "s") +
-    ", about " + formatDuration(minutes);
+    ", " + estimateWording(games) + " " + formatDuration(minutes);
   Array.from(densityBars.children).forEach((el, idx) => {
     el.style.background = idx >= i ? "var(--accent)" : "var(--border)";
   });
