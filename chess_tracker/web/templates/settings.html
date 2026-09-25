@@ -5,6 +5,12 @@
 {% if needs_email %}
 <div class="error">An email is required by Chess.com before fetching games. Set it below, then try Update again.</div>
 {% endif %}
+{% if restored %}
+<div class="panel" style="background:var(--accent-soft);border-color:var(--accent)">Backup restored. A safety copy of your previous data is in the <code>backups</code> folder next to the database.</div>
+{% endif %}
+{% if restore_error %}
+<div class="error">{{ restore_error }}</div>
+{% endif %}
 {% if saved %}
 <div class="panel" style="background:var(--accent-soft);border-color:var(--accent)">Saved.</div>
 {% endif %}
@@ -35,6 +41,25 @@
       </div>
     </div>
     <button type="submit">Save</button>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Backup</h2>
+  <p class="muted">A small file with your analysed games, mistakes, practice and puzzle history,
+    streaks, ratings, badges and settings (including your email above). The Chess.com downloads
+    and puzzle library aren't included by default because they can be downloaded again.</p>
+  <p class="muted">Last backup:
+    {% if settings.last_backup_at %}{{ settings.last_backup_at[:16].replace('T', ' ') }} UTC{% else %}never{% endif %}</p>
+  <div class="btnrow">
+    <a class="btn" href="/backup/download" download>Download backup</a>
+    <a class="btn-secondary" href="/backup/download?full=1" download>Download everything (large)</a>
+  </div>
+  <form method="post" action="/backup/restore" enctype="multipart/form-data" style="margin-top:18px"
+        onsubmit="return confirm('Replace your current data with this backup? A safety copy of what you have now is kept.');">
+    <label for="backupFile">Restore from a backup file</label>
+    <input type="file" id="backupFile" name="backup" required accept=".db">
+    <button type="submit" class="btn-secondary" style="color:var(--danger);border-color:var(--danger)">Restore</button>
   </form>
 </div>
 

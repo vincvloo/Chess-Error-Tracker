@@ -4,15 +4,20 @@ dashboard, achievements, and practice mode."""
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
+from urllib.parse import quote
 
 import chess
-from fastapi import APIRouter, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, File, Form, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from starlette.background import BackgroundTask
 from fastapi.templating import Jinja2Templates
 
 from .. import gamification
 from ..analysis import INACCURACY
 from ..analysis_runner import DEFAULT_PARALLEL_THRESHOLD, DEFAULT_WORKERS
+from ..backup import BackupError, backup_filename, create_backup, restore_backup
 from ..bot import PLAY_MAX_ELO, PLAY_MIN_ELO, STOCKFISH_MIN_ELO
 from ..db import get_settings, open_db, set_settings
 from ..engine import ENGINE_HELP, find_engine, find_maia_weights
@@ -112,14 +117,62 @@ def demo_dashboard(request: Request):
 
 
 @router.get("/settings", response_class=HTMLResponse)
-def settings_page(request: Request, needs_email: str = "", saved: str = ""):
+def settings_page(request: Request, needs_email: str = "", saved: str = "",
+                  restored: str = "", restore_error: str = ""):
     conn = open_db(request.app.state.db_path)
     try:
         settings = get_settings(conn)
     finally:
         conn.close()
     return templates.TemplateResponse(request, "settings.html",
-        {"settings": settings, "needs_email": bool(needs_email), "saved": bool(saved)})
+        {"settings": settings, "needs_email": bool(needs_email), "saved": bool(saved),
+         "restored": bool(restored), "restore_error": restore_error})
+
+
+@router.get("/backup/download")
+def backup_download(request: Request, full: str = ""):
+    """A fresh backup of your data as a file download. `full` also includes the
+    Chess.com downloads and puzzle library (much larger)."""
+    db_path = request.app.state.db_path
+    fd, tmp = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    os.remove(tmp)        # create_backup wants to make the file itself
+    try:
+        info = create_backup(db_path, tmp, full=bool(full))
+    except BackupError as exc:
+        return HTMLResponse(f"<p>{exc}</p>", status_code=400)
+    conn = open_db(db_path)
+    try:
+        set_settings(conn, last_backup_at=info["created_at"])
+    finally:
+        conn.close()
+    return FileResponse(tmp, filename=backup_filename(bool(full)),
+                        media_type="application/octet-stream",
+                        background=BackgroundTask(os.remove, tmp))
+
+
+@router.post("/backup/restore")
+def backup_restore(request: Request, backup: UploadFile = File(...)):
+    """Replace your data with an uploaded backup. Refused while an analysis or
+    puzzle import is running; a safety copy of the current data is kept."""
+    def back(**params):
+        query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
+        return RedirectResponse(f"/settings?{query}", status_code=303)
+
+    if (request.app.state.jobs.get_active_job_id()
+            or request.app.state.puzzle_import.get_active_job_id()):
+        return back(restore_error="An update or puzzle import is running. "
+                                  "Wait for it to finish, then restore.")
+    fd, tmp = tempfile.mkstemp(suffix=".db")
+    try:
+        with os.fdopen(fd, "wb") as out:
+            shutil.copyfileobj(backup.file, out)
+        restore_backup(request.app.state.db_path, tmp)
+    except BackupError as exc:
+        return back(restore_error=str(exc))
+    finally:
+        os.remove(tmp)
+    return back(restored=1)
 
 
 @router.post("/settings")
