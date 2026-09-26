@@ -20,6 +20,7 @@ import chess.engine
 from .analysis import INACCURACY, analyse_game
 from .chesscom import ChessComClient, collect_games
 from .db import already_analysed, open_db, save_game
+from .position_cache import CachingEngine
 
 logger = logging.getLogger(__name__)
 
@@ -123,21 +124,24 @@ def _analyse_shard(db_path: str, user: str, games: list[dict], engine_path: str,
     conn = open_db(db_path)
     engine = chess.engine.SimpleEngine.popen_uci(engine_path)
     engine.configure({"Threads": threads})
+    analyser = CachingEngine(engine, conn)
     new = 0
     failed = []
     try:
         for i, g in enumerate(games, 1):
             if cancel_event.is_set():
                 break
-            result = analyse_game(g, user, engine, depth, min_loss)
+            result = analyse_game(g, user, analyser, depth, min_loss)
             if result:
                 rec, mistakes = result
                 if _save_with_retry(conn, rec, mistakes, depth, user, g.get("url", "")):
                     new += 1
                 else:
                     failed.append(g.get("url", ""))
+            analyser.flush()
             progress_queue.put((shard_index, i, len(games)))
     finally:
+        analyser.flush()
         engine.quit()
         conn.close()
     return new, failed
@@ -264,6 +268,7 @@ def run_analysis(conn: sqlite3.Connection, users: list[str], email: str, engine_
     try:
         engine = chess.engine.SimpleEngine.popen_uci(engine_path)
         engine.configure({"Threads": threads})
+        analyser = CachingEngine(engine, conn)
         for user in users:
             started = datetime.now(timezone.utc).isoformat(timespec="seconds")
             client = ChessComClient(email, conn, pause)
@@ -296,7 +301,7 @@ def run_analysis(conn: sqlite3.Connection, users: list[str], email: str, engine_
                     for i, g in enumerate(todo, 1):
                         if cancel_event is not None and cancel_event.is_set():
                             break
-                        result = analyse_game(g, user, engine, depth, min_loss)
+                        result = analyse_game(g, user, analyser, depth, min_loss)
                         if result:
                             rec, mistakes = result
                             if _save_with_retry(conn, rec, mistakes, depth, user,
@@ -304,6 +309,7 @@ def run_analysis(conn: sqlite3.Connection, users: list[str], email: str, engine_
                                 new += 1
                             else:
                                 failed.append(g.get("url", ""))
+                        analyser.flush()
                         if not quiet:
                             print(f"\r[{user}] analysed {i}/{len(todo)}", end="",
                                   file=sys.stderr)
@@ -331,6 +337,11 @@ def run_analysis(conn: sqlite3.Connection, users: list[str], email: str, engine_
                                  (user.lower(), started,
                                   datetime.now(timezone.utc).isoformat(timespec="seconds"),
                                   client.requests_made, new, depth))
+
+            cache = analyser.cache
+            if cache.lookups:
+                logger.info(f"[{user}] position cache: {cache.hits} of {cache.lookups} "
+                            f"opening lookups answered without the engine")
 
             if failed:
                 logger.warning(

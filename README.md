@@ -293,6 +293,7 @@ Everything lives in one SQLite file, `chess_tracker.db` next to the script by de
 | `badges_earned` | Which badges each player has earned, and when. |
 | `daily_puzzles` | Today's (and past days') daily puzzle. |
 | `puzzle_rush_scores` | Final score of each puzzle rush. |
+| `position_evals` | The engine's verdict on opening positions, remembered so the same position isn't analysed again for every game that reaches it. Only a speed-up; safe to delete. |
 
 Everything is scoped by username, so one database can hold any number of people
 without their data mixing.
