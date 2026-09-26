@@ -51,13 +51,13 @@ def test_activity_days_marks_practice_and_puzzle_days_oldest_first():
     conn = open_db(":memory:")
     conn.execute("INSERT INTO practice_attempts (practicing_user, mistake_id, owner, category, "
                  "verdict, hint_used, created_at) VALUES ('alice', 1, 'alice', 'c', 'best', 0, "
-                 "'2026-09-20T10:00:00+00:00')")
+                 "'2026-09-20T12:00:00+00:00')")
     conn.execute("INSERT INTO puzzle_attempts (practicing_user, puzzle_id, verdict, "
                  "move_index_reached, created_at) VALUES ('alice', 'p', 'failed', 1, "
-                 "'2026-09-22T10:00:00+00:00')")
+                 "'2026-09-22T12:00:00+00:00')")
     conn.execute("INSERT INTO puzzle_attempts (practicing_user, puzzle_id, verdict, "
                  "move_index_reached, created_at) VALUES ('bob', 'p', 'solved', 1, "
-                 "'2026-09-21T10:00:00+00:00')")
+                 "'2026-09-21T12:00:00+00:00')")
     conn.commit()
     days = g.activity_days(conn, "alice", days=5, today=date(2026, 9, 23))
     assert [d["date"] for d in days] == ["2026-09-19", "2026-09-20", "2026-09-21",

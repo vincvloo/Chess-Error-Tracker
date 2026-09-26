@@ -153,7 +153,7 @@ From the home page (once you've set which tracked player is "you"):
 ### Streaks, ratings and badges
 
 Practising or solving a puzzle keeps a **daily streak** going. You get one automatic
-**streak freeze** per week, which bridges a single missed day. Days are counted in UTC.
+**streak freeze** per week, which bridges a single missed day. Days are counted in your computer's local time.
 
 Your **skill rating** has an overall number and a number per theme (fork, pin, endgame, ...):
 
@@ -293,6 +293,7 @@ Everything lives in one SQLite file, `chess_tracker.db` next to the script by de
 | `badges_earned` | Which badges each player has earned, and when. |
 | `daily_puzzles` | Today's (and past days') daily puzzle. |
 | `puzzle_rush_scores` | Final score of each puzzle rush. |
+| `position_evals` | The engine's verdict on opening positions, remembered so the same position isn't analysed again for every game that reaches it. Only a speed-up; safe to delete. |
 
 Everything is scoped by username, so one database can hold any number of people
 without their data mixing.
@@ -314,6 +315,24 @@ GROUP BY username;
 
 `--export mistakes.csv` dumps the same data for a spreadsheet, covering every
 user named in `--user`.
+
+### Backing up
+
+```
+chess-tracker backup                  # saves to a backups/ folder next to the database
+chess-tracker backup --to mine.db     # or anywhere you like
+chess-tracker restore mine.db         # asks first, and keeps a safety copy of what it replaces
+```
+
+The same is on the web app's Settings page (Download backup, Restore). A backup is an
+ordinary SQLite file holding your analysed games, mistakes, practice and puzzle history,
+streaks, ratings, badges and settings (so it includes your email). It leaves out the
+downloaded Chess.com games and the Lichess puzzle library, which can be fetched again and
+make up most of the database; add `--full` (or "Download everything") to include them. For
+reference, a database of 42,000 games is about 380 MB and its data-only backup about 140 MB.
+
+Backing up is safe while the app is running. Restore while an update is running is refused;
+from the command line, close the app first.
 
 One caution on Windows: if your user folder is redirected to OneDrive, put the
 database somewhere local with `--db`. SQLite and cloud sync do not mix.

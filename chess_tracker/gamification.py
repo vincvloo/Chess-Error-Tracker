@@ -51,7 +51,9 @@ def _now() -> str:
 
 
 def _today() -> date:
-    return datetime.now(timezone.utc).date()
+    """The player's own calendar day (this machine's local time, not UTC), so
+    a 9pm practice session counts for that evening rather than tomorrow."""
+    return datetime.now().astimezone().date()
 
 
 def _week_key(d: date) -> str:
@@ -132,15 +134,15 @@ def get_streak(conn: sqlite3.Connection, username: str, today: date | None = Non
 def activity_days(conn: sqlite3.Connection, username: str, days: int = 14,
                   today: date | None = None) -> list[dict]:
     """The last `days` days, oldest first, each {date, active}: whether the
-    player practised or solved/failed a puzzle that (UTC) day."""
+    player practised or solved/failed a puzzle that (local) day."""
     today = today or _today()
     first = (today - timedelta(days=days - 1)).isoformat()
     username = username.lower()
     active = {r[0] for r in conn.execute(
-        "SELECT substr(created_at, 1, 10) FROM practice_attempts "
-        "WHERE practicing_user = ? AND substr(created_at, 1, 10) >= ? "
-        "UNION SELECT substr(created_at, 1, 10) FROM puzzle_attempts "
-        "WHERE practicing_user = ? AND substr(created_at, 1, 10) >= ?",
+        "SELECT date(created_at, 'localtime') FROM practice_attempts "
+        "WHERE practicing_user = ? AND date(created_at, 'localtime') >= ? "
+        "UNION SELECT date(created_at, 'localtime') FROM puzzle_attempts "
+        "WHERE practicing_user = ? AND date(created_at, 'localtime') >= ?",
         (username, first, username, first))}
     out = []
     for i in range(days):
@@ -448,7 +450,7 @@ def daily_solved(conn: sqlite3.Connection, username: str, on: date | None = None
         return False
     return conn.execute(
         "SELECT 1 FROM puzzle_attempts WHERE practicing_user = ? AND puzzle_id = ? "
-        "AND verdict = 'solved' AND substr(created_at, 1, 10) = ? LIMIT 1",
+        "AND verdict = 'solved' AND date(created_at, 'localtime') = ? LIMIT 1",
         (username.lower(), row["puzzle_id"], (on or _today()).isoformat())).fetchone() is not None
 
 

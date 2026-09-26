@@ -160,6 +160,18 @@ CREATE TABLE IF NOT EXISTS puzzle_source_stats (
     updated_at   TEXT
 );
 
+-- Engine verdicts on opening positions (chess_tracker/position_cache.py), so
+-- the same position isn't analysed again for every game that reaches it. Only
+-- a speed-up: safe to delete, and left out of the default backup.
+CREATE TABLE IF NOT EXISTS position_evals (
+    engine    TEXT NOT NULL,
+    epd       TEXT NOT NULL,
+    depth     INTEGER NOT NULL,
+    cp_white  INTEGER NOT NULL,
+    best      TEXT NOT NULL,
+    PRIMARY KEY (engine, epd, depth)
+) WITHOUT ROWID;
+
 -- Gamification (chess_tracker/gamification.py). All keyed by username, none
 -- with a FK to another table, same reasoning as practice_attempts.
 
@@ -234,6 +246,8 @@ CREATE INDEX IF NOT EXISTS idx_practice_attempts_user ON practice_attempts(pract
 SETTINGS_DEFAULTS = {
     "primary_user": None, "email": "", "depth": 14, "threads": 2,
     "pause": 0.6, "min_loss": INACCURACY,
+    # When the last backup was made (ISO time, UTC), shown on the Settings page.
+    "last_backup_at": "",
     # Phase 5 (play mode): which engine/difficulty the /play form pre-fills,
     # and whether adaptive steering starts checked. Not enforced server-side
     # beyond the default -- the /play form can always override per game.
