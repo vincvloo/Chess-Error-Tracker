@@ -37,6 +37,16 @@
   background: var(--accent); opacity: 0.55; }
 .sq.hint { outline: 3px solid #c9a227; outline-offset: -3px; }
 .sq:focus-visible { outline: 3px solid var(--text); outline-offset: -3px; }
+/* Move arrows (coaching) drawn over the same grid cell as the board. */
+.arrows { grid-column: 2; grid-row: 1; width: 100%; aspect-ratio: 1; pointer-events: none; z-index: 2; }
+.arrows .shaft { stroke-width: 0.17; stroke-linecap: round; opacity: 0.85; }
+.arrows .head { stroke: none; opacity: 0.85; }
+.arrows .best .shaft { stroke: #3fa66f; }
+.arrows .best .head { fill: #3fa66f; }
+.arrows .yours .shaft { stroke: #d6455d; }
+.arrows .yours .head { fill: #d6455d; }
+.arrows .ok .shaft { stroke: #c9a227; }
+.arrows .ok .head { fill: #c9a227; }
 .sq.white-piece { color: #f5f5f5; text-shadow: 0 0 2px #000, 0 0 1px #000; }
 .sq.black-piece { color: #111; text-shadow: 0 0 2px #fff8, 0 0 1px #fff8; }
 .promo { display: none; justify-content: center; gap: 8px; margin: 10px 0; }
@@ -50,6 +60,7 @@
   <div class="ranks" id="ranks" aria-hidden="true"></div>
   <div class="board" id="board" role="group"
        aria-label="Chess board. Arrow keys move between squares, Enter or Space selects."></div>
+  <svg class="arrows" id="arrows" viewBox="0 0 8 8" aria-hidden="true"></svg>
   <div class="files" id="files" aria-hidden="true"></div>
 </div>
 <div class="promo" id="promo" role="group" aria-label="Promote pawn to">
@@ -123,7 +134,51 @@ function syncAria() {
   });
 }
 
+// Arrows for coaching: showArrow("g1f3", "best" | "yours" | "ok"). They belong
+// to one position, so every redraw clears them.
+function squareCenter(sq) {
+  const file = FILES.indexOf(sq[0]);
+  const rank = parseInt(sq[1], 10);
+  const flip = boardColour === "black";
+  return [(flip ? 7 - file : file) + 0.5, (flip ? rank - 1 : 8 - rank) + 0.5];
+}
+
+function clearArrows() {
+  const svg = document.getElementById("arrows");
+  if (svg) svg.innerHTML = "";
+}
+
+function showArrow(uci, kind) {
+  const svg = document.getElementById("arrows");
+  if (!svg || !uci) return;
+  const [x1, y1] = squareCenter(uci.slice(0, 2));
+  const [x2, y2] = squareCenter(uci.slice(2, 4));
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const headLen = 0.42, headHalf = 0.24;
+  const bx = x2 - ux * headLen, by = y2 - uy * headLen;   // where the shaft meets the head
+  const ns = "http://www.w3.org/2000/svg";
+  const g = document.createElementNS(ns, "g");
+  g.setAttribute("class", kind);
+  const shaft = document.createElementNS(ns, "line");
+  shaft.setAttribute("class", "shaft");
+  shaft.setAttribute("x1", x1); shaft.setAttribute("y1", y1);
+  shaft.setAttribute("x2", bx); shaft.setAttribute("y2", by);
+  const head = document.createElementNS(ns, "polygon");
+  head.setAttribute("class", "head");
+  head.setAttribute("points", [
+    x2 + "," + y2,
+    (bx - uy * headHalf) + "," + (by + ux * headHalf),
+    (bx + uy * headHalf) + "," + (by - ux * headHalf),
+  ].join(" "));
+  g.appendChild(shaft);
+  g.appendChild(head);
+  svg.appendChild(g);
+}
+
 function drawBoard(fen) {
+  clearArrows();
   const board = parseFenBoard(fen);
   const boardEl = document.getElementById("board");
   const hadFocus = boardEl.contains(document.activeElement);

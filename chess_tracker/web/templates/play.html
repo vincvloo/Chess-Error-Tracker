@@ -7,6 +7,13 @@
 #status { margin: 12px 0; font-size: 13.5px; min-height: 1.5em; }
 #status.over { font-weight: 600; }
 .approx { color: var(--muted); font-size: 11.5px; }
+.coachbox { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+  font-size: 13.5px; }
+.coachbox.good { border-color: #3fa66f; }
+.coachbox.warn { border-color: #c9a227; }
+.coachbox.bad { border-color: var(--danger); }
+.coachbox .lesson { color: var(--muted); margin-top: 4px; }
+.coachbox .btnrow { margin-top: 10px; }
 #analyzeResult tr.reviewrow { cursor: pointer; }
 #analyzeResult tr.reviewrow:hover { background: var(--accent-soft); }
 #analyzeResult tr.reviewrow.selected-row { background: var(--accent-soft); outline: 1px solid var(--accent); }
@@ -53,11 +60,23 @@
       <div class="approx" id="adaptiveNote"></div>
     </div>
   </div>
+  <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text); margin-top:14px;">
+    <input type="checkbox" id="coachCheckbox" style="width:auto;" checked>
+    Coach me as I play (rates each of my moves and shows the best move)
+  </label>
   <button type="button" id="newGameBtn">New game</button>
 
   <div id="boardPanel" style="display:none; margin-top:16px;">
     {{ board_markup() }}
     <div id="status" role="status" aria-live="polite"></div>
+    <div id="coach" class="coachbox" role="status" aria-live="polite" style="display:none">
+      <div id="coachText"></div>
+      <div id="coachLesson" class="lesson"></div>
+      <div id="coachButtons" class="btnrow" style="display:none">
+        <button type="button" id="takeBackBtn" class="btn-secondary">Take back</button>
+        <button type="button" id="takeBackShowBtn" class="btn-secondary">Take back and show the best move</button>
+      </div>
+    </div>
     <div id="analyzeSection" style="display:none; margin-top:14px;">
       <button type="button" id="analyzeBtn" class="btn-secondary">Analyze this game</button>
       <div id="analyzeResult"></div>
@@ -85,6 +104,9 @@ let moveList = []; // every ply's uci, human and bot, in order -- for post-game 
 let lastOutcome = null;
 let lastTermination = null;
 let lastMistakes = []; // last /api/play/analyze result, for click-to-review rows
+let history = [];      // one entry per move of yours: the position and move count before it
+let takebacks = 0;     // how many moves were taken back this game
+let lastCoach = null;  // the coach's verdict on your most recent move
 
 function isLocked() { return !gameActive || sideToMove(currentFen) !== boardColour; }
 function onBoardMove(from, to, promotion) { return submitMove(from, to, promotion); }
@@ -116,9 +138,90 @@ function describeOutcome(outcome, termination) {
   return (youWon ? "You win by " + reason + "!" : "The bot wins by " + reason + ".");
 }
 
+function coachOn() { return document.getElementById("coachCheckbox").checked; }
+
+try {
+  if (localStorage.getItem("coachOff") === "1") document.getElementById("coachCheckbox").checked = false;
+} catch (e) { /* private window or blocked storage: the default is fine */ }
+document.getElementById("coachCheckbox").addEventListener("change", e => {
+  try { localStorage.setItem("coachOff", e.target.checked ? "0" : "1"); } catch (err) { /* ignore */ }
+  if (!e.target.checked) document.getElementById("coach").style.display = "none";
+});
+
+// The coach runs alongside the bot's reply, so rating your move costs no extra waiting.
+function fetchCoach(fen, from, to, promotion) {
+  return fetch("/api/play/coach", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fen, from, to, promotion }),
+  }).then(r => (r.ok ? r.json() : null)).catch(() => null);
+}
+
+function showCoach(v) {
+  const box = document.getElementById("coach");
+  const buttons = document.getElementById("coachButtons");
+  lastCoach = null;
+  buttons.style.display = "none";
+  if (!v || !v.legal) {
+    box.className = "coachbox";
+    document.getElementById("coachText").textContent = "The coach couldn't rate that move (is Stockfish installed?).";
+    document.getElementById("coachLesson").textContent = "";
+    box.style.display = "";
+    return;
+  }
+  const error = ["inaccuracy", "mistake", "blunder"].includes(v.rating);
+  let text = v.label + ".";
+  if (v.rating === "good" && v.bestSan && v.bestSan !== v.yourSan) {
+    text = "Good move. (The engine liked " + v.bestSan + " a little more.)";
+  } else if (error) {
+    const cost = v.cpLoss >= 1000 ? "a decisive advantage" : "about " + (v.cpLoss / 100).toFixed(1) + " pawns";
+    text = v.label + ": " + v.yourSan + " gave up " + cost + ". The best move was " + v.bestSan + ".";
+  }
+  document.getElementById("coachText").textContent = text;
+  document.getElementById("coachLesson").textContent = error && v.lesson ? v.category + ". " + v.lesson : "";
+  box.className = "coachbox " + (error ? (v.rating === "inaccuracy" ? "warn" : "bad") : "good");
+  box.style.display = "";
+  if (error) {
+    lastCoach = v;
+    buttons.style.display = "";
+  }
+}
+
+async function takeBack(showBest) {
+  const h = history.pop();
+  const v = lastCoach;
+  if (!h || !v) return;
+  takebacks += 1;
+  currentFen = h.fen;
+  moveList.length = h.len;
+  lastOutcome = null;
+  lastTermination = null;
+  document.getElementById("analyzeSection").style.display = "none";
+  document.getElementById("analyzeResult").innerHTML = "";
+  document.getElementById("coachButtons").style.display = "none";
+  lastCoach = null;
+  await fetchLegalMoves(currentFen);
+  drawBoard(currentFen);
+  if (showBest) showArrow(v.bestUci, "best");
+  document.getElementById("coachText").textContent = showBest
+    ? "Taken back. The green arrow is the best move; try it, or find another."
+    : "Taken back. Have another look.";
+  document.getElementById("coachLesson").textContent = "";
+  const status = document.getElementById("status");
+  status.className = "";
+  status.textContent = "Your move.";
+  gameActive = true;
+}
+document.getElementById("takeBackBtn").addEventListener("click", () => takeBack(false));
+document.getElementById("takeBackShowBtn").addEventListener("click", () => takeBack(true));
+
 async function submitMove(from, to, promotion) {
+  const fenBefore = currentFen;
+  const movesBefore = moveList.length;
+  const coachRequest = coachOn() ? fetchCoach(fenBefore, from, to, promotion) : Promise.resolve(undefined);
   gameActive = false;
   clearHighlights();
+  document.getElementById("coachButtons").style.display = "none";
   const status = document.getElementById("status");
   status.textContent = "Thinking…";
   status.className = "";
@@ -142,6 +245,7 @@ async function submitMove(from, to, promotion) {
     return;
   }
 
+  history.push({ fen: fenBefore, len: movesBefore });
   moveList.push(from + to + (promotion || ""));
   if (result.botMove) moveList.push(result.botMove);
 
@@ -149,6 +253,8 @@ async function submitMove(from, to, promotion) {
   selected = null;
   await fetchLegalMoves(currentFen);
   drawBoard(currentFen);
+  const verdict = await coachRequest;
+  if (verdict !== undefined) showCoach(verdict);
 
   if (result.gameOver) {
     lastOutcome = result.outcome;
@@ -172,6 +278,10 @@ async function startGame() {
   document.getElementById("boardPanel").style.display = "";
   document.getElementById("analyzeSection").style.display = "none";
   document.getElementById("analyzeResult").innerHTML = "";
+  document.getElementById("coach").style.display = "none";
+  history = [];
+  takebacks = 0;
+  lastCoach = null;
   document.getElementById("badgeToast").classList.remove("show");
   document.getElementById("analyzeBtn").disabled = false;
   const status = document.getElementById("status");
@@ -325,7 +435,7 @@ document.getElementById("analyzeBtn").addEventListener("click", async () => {
     const r = await fetch("/api/play/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ moves: moveList, colour: boardColour, user: DATA.username }),
+      body: JSON.stringify({ moves: moveList, colour: boardColour, user: DATA.username, takebacks }),
     });
     const data = await r.json();
     renderAnalysis(data);
@@ -333,6 +443,12 @@ document.getElementById("analyzeBtn").addEventListener("click", async () => {
     // once per game (startGame() re-enables it).
     if (data.error) btn.disabled = false;
     showBadgeToast(data.newBadges, document.getElementById("badgeToast"));
+    if (!data.error && takebacks > 0) {
+      const note = document.createElement("p");
+      note.className = "muted";
+      note.textContent = "Your skill rating wasn't updated, because you took moves back in this game.";
+      el.prepend(note);
+    }
   } catch (e) {
     btn.disabled = false;
     throw e;

@@ -12,7 +12,9 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from .. import gamification
-from ..analysis import INACCURACY, MISTAKE, analyse_bot_game, score_cp
+from ..analysis import (CP_LOSS_CAP, INACCURACY, MISTAKE, analyse_bot_game, classify, score_cp,
+                        score_move)
+from ..coaching import RATING_LABELS, explain, rate_move
 from ..bot import PLAY_MAX_ELO, PLAY_MIN_ELO, STOCKFISH_MIN_ELO, beginner_move, choose_bot_move
 from ..db import open_db
 from ..engine import find_engine, find_lc0, find_maia_weights
@@ -212,12 +214,17 @@ async def practice_attempt(request: Request, mistake_id: int):
     best_board = board.copy()
     best_board.push(best_board.parse_san(row["best"]))
 
+    best_move = board.parse_san(row["best"])
     result = {
         "legal": True,
         "yourSan": your_san,
         "bestSan": row["best"],
         "yourFen": your_board.fen(),
         "bestFen": best_board.fen(),
+        "yourUci": move.uci(),
+        "bestUci": best_move.uci(),
+        "category": row["category"],
+        "lesson": explain(row["category"]),
     }
 
     if your_san == row["best"]:
@@ -362,6 +369,67 @@ def play_legal_moves(fen: str):
     return {"legalMoves": [m.uci() for m in board.legal_moves]}
 
 
+# Depth for the live coach's verdict on the player's own move: shallower than
+# the archival analysis (this runs while a game is being played) but the same
+# centipawn yardstick.
+COACH_DEPTH = 12
+
+
+@router.post("/play/coach")
+async def play_coach(request: Request):
+    """
+    Rate one move the player just made in a bot game -- best / good /
+    inaccuracy / mistake / blunder, the engine's best move, and (for a real
+    error) what kind of mistake it was and how to avoid it. Uses the same
+    score_move()/classify() as the post-game analysis. `fen` is the position
+    BEFORE the move, trusted like /play/move's is (bot games aren't stored).
+    """
+    body = await request.json()
+    from_sq, to_sq = body.get("from"), body.get("to")
+    promotion = body.get("promotion") or ""
+    fen = body.get("fen")
+    if not fen or not from_sq or not to_sq:
+        return JSONResponse({"error": "fen, from and to are required"}, status_code=400)
+    try:
+        board = chess.Board(fen)
+    except ValueError:
+        return JSONResponse({"error": "invalid fen"}, status_code=400)
+    if not board.is_valid():
+        return JSONResponse({"error": "invalid position"}, status_code=400)
+    try:
+        move = chess.Move.from_uci(from_sq + to_sq + promotion)
+    except chess.InvalidMoveError:
+        return {"legal": False}
+    if move not in board.legal_moves:
+        return {"legal": False}
+
+    engine_path = request.app.state.engine_path or find_engine()
+    if not engine_path or not os.path.isfile(engine_path):
+        return JSONResponse({"error": "Stockfish isn't installed"}, status_code=503)
+
+    me = board.turn
+    try:
+        with chess.engine.SimpleEngine.popen_uci(engine_path) as engine:
+            scored = score_move(board, move, me, engine, chess.engine.Limit(depth=COACH_DEPTH))
+    except (chess.engine.EngineError, chess.engine.EngineTerminatedError, OSError):
+        return JSONResponse({"error": "the engine crashed or is unavailable"}, status_code=503)
+    if scored is None:
+        return {"legal": True, "rating": "good", "label": RATING_LABELS["good"]}
+
+    cp_loss, best, reply, cp_before, cp_after = scored
+    rating = rate_move(cp_loss, move == best)
+    category = None
+    if rating in ("inaccuracy", "mistake", "blunder"):
+        category = classify(board, move, best, me, reply, cp_before, cp_after)
+    return {
+        "legal": True, "rating": rating, "label": RATING_LABELS[rating],
+        "cpLoss": max(0, min(cp_loss, CP_LOSS_CAP)),
+        "yourSan": board.san(move), "yourUci": move.uci(),
+        "bestSan": board.san(best), "bestUci": best.uci(),
+        "category": category, "lesson": explain(category),
+    }
+
+
 @router.post("/play/first-move")
 async def play_first_move(request: Request):
     """The bot's opening move, for when the human chose to play Black --
@@ -487,7 +555,9 @@ async def play_analyze(request: Request):
 
     new_badges: list[dict] = []
     user = (body.get("user") or "").strip().lower()
-    if user:
+    rating_updated = False
+    if user and not int(body.get("takebacks") or 0):
+        rating_updated = True
         # The bot game itself is still never stored -- only its effect on the
         # skill rating is, once, right now (it can't be backdated or replayed).
         conn = open_db(request.app.state.db_path)
@@ -500,7 +570,8 @@ async def play_analyze(request: Request):
         finally:
             conn.close()
 
-    return {"mistakes": mistakes, "totalMoves": len(moves), "newBadges": new_badges}
+    return {"mistakes": mistakes, "totalMoves": len(moves), "newBadges": new_badges,
+            "ratingUpdated": rating_updated}
 
 
 @router.delete("/practice-attempts/{attempt_id}")
@@ -650,7 +721,8 @@ async def puzzle_attempt(request: Request, puzzle_id: str):
         badges = _log_puzzle_attempt(request, practicing_user, puzzle_id, "failed",
                                      move_index, row["rating"], row["themes"])
         return {"legal": True, "correct": False, "solved": False, "yourSan": your_san,
-                "bestSan": best_san, "fen": board.fen(), "newBadges": badges}
+                "bestSan": best_san, "bestUci": best_move.uci(), "yourUci": move.uci(),
+                "fen": board.fen(), "newBadges": badges}
 
     board.push(move)
     next_index = move_index + 1

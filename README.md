@@ -141,10 +141,10 @@ From the home page (once you've set which tracked player is "you"):
 
 | Page | What it does |
 |---|---|
-| **Practice** | Replays your own stored mistakes on an interactive board. Pick a category, try the move again, ask for a hint, and see whether the engine agrees ("also fine" counts). You can extend a queue with other tracked players' mistakes. |
-| **Play** | A full game against Stockfish or Maia at a chosen strength, optionally steered toward the game phase you struggle in. "Analyze this game" scores it with the same logic as your real games, and you can click any flagged move to see the position. Bot games are never stored. |
-| **Puzzles** | Lichess puzzles from a local, filtered copy of their public database (CC0). Filter by rating and theme, and use "Get more puzzles" to top up. |
-| **Daily puzzle** | One puzzle per day, the same for everyone on this machine. |
+| **Practice** | Replays your own stored mistakes on an interactive board. Pick a category, try the move again, ask for a hint, and see whether the engine agrees ("also fine" counts). After a miss, the best move is drawn on the board (green, yours in red or amber) with a one-line reminder of what went wrong in your game. You can extend a queue with other tracked players' mistakes. |
+| **Play** | A full game against Stockfish or Maia at a chosen strength, optionally steered toward the game phase you struggle in. "Coach me as I play" (on by default) rates each of your moves as you make it (best / good / inaccuracy / mistake / blunder), shows the engine's best move and what kind of mistake it was, and lets you take a move back and try again, optionally with the best move drawn as an arrow. "Analyze this game" scores the finished game with the same logic as your real games, and you can click any flagged move to see the position. A game where you took moves back doesn't change your skill rating. Bot games are never stored. |
+| **Puzzles** | Lichess puzzles from a local, filtered copy of their public database (CC0). Filter by rating and theme, and use "Get more puzzles" to top up. A wrong answer shows the right move as an arrow. |
+| **Daily puzzle** | One puzzle per day (UTC), the same for everyone on this machine. |
 | **Puzzle rush** | Solve as many puzzles as you can in 3 minutes. Only the final score is saved. |
 | **Achievements** | Streak, skill rating, badges, rating by theme, how each mistake category has moved over time, and your practice history. |
 | **Leaderboard** | Every tracked player on this machine who has any activity, side by side. Purely local. |

@@ -148,11 +148,12 @@ def test_practice_attempt_correct_move(tmp_path):
     r = client.post("/api/practice/1/attempt", json={"from": "e2", "to": "e4"})
     assert r.status_code == 200
     body = r.json()
-    assert body == {
-        "legal": True, "verdict": "best", "correct": True,
-        "yourSan": "e4", "bestSan": "e4",
-        "yourFen": body["yourFen"], "bestFen": body["yourFen"],
-    }
+    assert {k: body[k] for k in ("legal", "verdict", "correct", "yourSan", "bestSan")} == {
+        "legal": True, "verdict": "best", "correct": True, "yourSan": "e4", "bestSan": "e4"}
+    assert body["bestFen"] == body["yourFen"]
+    # ...plus what the page needs to draw the arrows and show the lesson.
+    assert body["yourUci"] == body["bestUci"] == "e2e4"
+    assert body["category"] and body["lesson"]
 
 
 def test_practice_attempt_legal_but_wrong_move_with_no_engine_available(tmp_path):
