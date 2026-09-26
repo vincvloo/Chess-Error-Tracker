@@ -5,10 +5,10 @@ from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
-from chess_tracker.analysis_runner import DEFAULT_WORKERS
-from chess_tracker.db import open_db
-from chess_tracker.web.app import create_app
-from chess_tracker.web.jobs import (SECONDS_PER_GAME, estimate_seconds_per_game,
+from chess_mistake_coach.analysis_runner import DEFAULT_WORKERS
+from chess_mistake_coach.db import open_db
+from chess_mistake_coach.web.app import create_app
+from chess_mistake_coach.web.jobs import (SECONDS_PER_GAME, estimate_seconds_per_game,
                                     measured_seconds_per_game)
 
 

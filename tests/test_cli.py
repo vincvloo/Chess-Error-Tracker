@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from chess_tracker.cli import build_parser, load_config
+from chess_mistake_coach.cli import build_parser, load_config
 
 
 def test_load_config_missing_default_path_returns_empty(tmp_path):

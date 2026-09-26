@@ -2,16 +2,16 @@
 
 Usage:
     # first run, builds the database
-    chess-tracker --user vincent --email you@example.com
+    chess-mistake-coach --user vincent --email you@example.com
 
     # later runs, only new games get analysed
-    chess-tracker --user vincent --email you@example.com
+    chess-mistake-coach --user vincent --email you@example.com
 
     # report on everything already stored, no network, no engine
-    chess-tracker --user vincent --report-only
+    chess-mistake-coach --user vincent --report-only
 
     # deeper re-analysis of games previously done shallow
-    chess-tracker --user vincent --email you@example.com --depth 20
+    chess-mistake-coach --user vincent --email you@example.com --depth 20
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_DB = os.path.join(PROJECT_ROOT, "chess_tracker.db")
-DEFAULT_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".chess-tracker.json")
+DEFAULT_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".chess-mistake-coach.json")
 
 # Config-file keys that are allowed to override a CLI default. --user is
 # deliberately excluded: it stays a per-invocation, always-required flag
@@ -86,7 +86,7 @@ def _peek_config_path(argv: list[str]) -> str | None:
 
 def build_parser(config: dict | None = None) -> argparse.ArgumentParser:
     config = config or {}
-    p = argparse.ArgumentParser(description="Longitudinal chess error tracker")
+    p = argparse.ArgumentParser(description="Chess Mistake Coach: analyse your games, find the mistakes you keep making, and train them away.")
     p.add_argument("--config",
                    help="Path to a JSON file of defaults for the options below "
                         f"(default: {DEFAULT_CONFIG_PATH} if present)")

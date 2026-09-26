@@ -2,8 +2,8 @@ from datetime import date, datetime, timezone
 
 import chess
 
-from chess_tracker import gamification as g
-from chess_tracker.db import open_db, save_game
+from chess_mistake_coach import gamification as g
+from chess_mistake_coach.db import open_db, save_game
 
 
 def _conn():

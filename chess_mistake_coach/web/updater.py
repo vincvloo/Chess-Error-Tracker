@@ -32,9 +32,9 @@ def find_git() -> str | None:
 
 
 def repo_root() -> Path:
-    """The checkout root: chess_tracker/web/updater.py -> chess_tracker/web
-    -> chess_tracker -> repo root, per pyproject.toml's package layout
-    (chess_tracker/ sits directly under it)."""
+    """The checkout root: chess_mistake_coach/web/updater.py -> chess_mistake_coach/web
+    -> chess_mistake_coach -> repo root, per pyproject.toml's package layout
+    (chess_mistake_coach/ sits directly under it)."""
     return Path(__file__).resolve().parent.parent.parent
 
 

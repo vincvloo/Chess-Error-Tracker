@@ -27,7 +27,7 @@ class ChessComClient:
     """
 
     def __init__(self, email: str, conn: sqlite3.Connection, pause: float = 0.6):
-        self.headers = {"User-Agent": f"chess-error-tracker/2.0 ({email})"}
+        self.headers = {"User-Agent": f"chess-mistake-coach/2.0 ({email})"}
         self.conn = conn
         self.pause = pause
         self.requests_made = 0

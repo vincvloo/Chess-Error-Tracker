@@ -9,10 +9,10 @@ import chess
 import chess.engine
 import chess.pgn
 
-from chess_tracker.analysis import analyse_bot_game, analyse_game, score_cp, score_move
-from chess_tracker.analysis_runner import run_analysis
-from chess_tracker.db import open_db
-from chess_tracker.position_cache import MAX_FULLMOVE, CachingEngine, PositionCache
+from chess_mistake_coach.analysis import analyse_bot_game, analyse_game, score_cp, score_move
+from chess_mistake_coach.analysis_runner import run_analysis
+from chess_mistake_coach.db import open_db
+from chess_mistake_coach.position_cache import MAX_FULLMOVE, CachingEngine, PositionCache
 
 
 class FakeEngine:
@@ -198,7 +198,7 @@ def test_any_other_move_still_gets_both_analyses():
 
 def _reference_two_call_mistakes(moves, me, engine, min_loss):
     """The behaviour before the shortcut: always analyse before AND after."""
-    from chess_tracker.analysis import (BLUNDER, CP_LOSS_CAP, MISTAKE, _iter_own_moves_from_list,
+    from chess_mistake_coach.analysis import (BLUNDER, CP_LOSS_CAP, MISTAKE, _iter_own_moves_from_list,
                                         classify, game_phase)
     out = []
     for board, played in _iter_own_moves_from_list(moves, me):
@@ -255,7 +255,7 @@ def _run(games, tmp_path, name):
     engine = FakeEngine()
     conn = open_db(str(tmp_path / f"{name}.db"))
     with patch("chess.engine.SimpleEngine.popen_uci", return_value=engine), \
-         patch("chess_tracker.analysis_runner.collect_games", return_value=games):
+         patch("chess_mistake_coach.analysis_runner.collect_games", return_value=games):
         run_analysis(conn, ["alice"], "me@example.com", "/fake/stockfish", depth=8,
                      threads=1, pause=0, quiet=True)
     rows = conn.execute("SELECT game_url, move_number, cp_loss, category, played, best "
@@ -270,7 +270,7 @@ def test_run_analysis_uses_the_cache_across_games_and_records_the_same_mistakes(
     calls, rows, conn = _run(games, tmp_path, "cached")
 
     # The same four games with the cache switched off record identical mistakes...
-    with patch("chess_tracker.analysis_runner.CachingEngine",
+    with patch("chess_mistake_coach.analysis_runner.CachingEngine",
                lambda engine, conn: engine.__class__ and _NoCache(engine)):
         plain_calls, plain_rows, _ = _run(games, tmp_path, "plain")
     assert rows == plain_rows and rows

@@ -164,7 +164,7 @@ class JobManager:
             self._cancel_events[job_id] = cancel_event
 
         thread = threading.Thread(
-            target=self._run, name=f"chess-tracker-job-{job_id}",
+            target=self._run, name=f"chess-mistake-coach-job-{job_id}",
             args=(job_id, users, email, engine_path, depth, threads, pause, cancel_event),
             kwargs=dict(since=since, time_class=time_class, limit=limit, min_loss=min_loss),
             daemon=True)

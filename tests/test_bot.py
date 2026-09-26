@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import chess
 import chess.engine
 
-from chess_tracker.bot import (BEGINNER_MIN_ELO, STOCKFISH_MIN_ELO, beginner_depth,
+from chess_mistake_coach.bot import (BEGINNER_MIN_ELO, STOCKFISH_MIN_ELO, beginner_depth,
                                beginner_move, beginner_random_chance, choose_bot_move)
 
 _MIDGAME_FEN = "r1bq1rk1/2p1bppp/p1n2n2/1p1pp3/4P3/1B3N2/PPPP1PPP/RNBQR1K1 w - - 0 9"
@@ -57,7 +57,7 @@ def test_adaptive_picks_candidate_landing_in_eligible_phase(monkeypatch):
 
     def fake_phase(b, move_number):
         return "endgame" if b.move_stack[-1] == chess.Move.from_uci("d2d3") else "middlegame"
-    monkeypatch.setattr("chess_tracker.bot.game_phase", fake_phase)
+    monkeypatch.setattr("chess_mistake_coach.bot.game_phase", fake_phase)
 
     # Both well within Stockfish's own 40cp margin, so this isolates the
     # phase-matching logic itself, not the margin filter.
@@ -85,7 +85,7 @@ def test_adaptive_respects_per_engine_margin(monkeypatch):
 
     def fake_phase(b, move_number):
         return "endgame" if b.move_stack[-1] == chess.Move.from_uci("d2d3") else "middlegame"
-    monkeypatch.setattr("chess_tracker.bot.game_phase", fake_phase)
+    monkeypatch.setattr("chess_mistake_coach.bot.game_phase", fake_phase)
 
     engine = _mock_multipv([("e4d5", 100), ("d2d3", 0)])  # 100cp gap
 

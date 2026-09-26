@@ -5,8 +5,8 @@ with test_web_routes.py."""
 import chess
 from fastapi.testclient import TestClient
 
-from chess_tracker.db import open_db, save_game, set_settings
-from chess_tracker.web.app import create_app
+from chess_mistake_coach.db import open_db, save_game, set_settings
+from chess_mistake_coach.web.app import create_app
 from test_web_routes import (MISTAKE, REC, _empty_db, _fake_engine_path, _mock_analyze_engine,
                              _practice_seeded_db, _puzzle_seeded_db, _seeded_db)
 

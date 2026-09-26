@@ -81,8 +81,8 @@ CREATE TABLE IF NOT EXISTS runs (
 -- Web-app-only key/value settings: which tracked player is "you" (so
 -- Practice/Achievements/Analyse have a default), plus the fetch parameters
 -- (email, depth, threads, pause, min_loss) the home page pre-fills instead
--- of asking for on every run. The CLI's own ~/.chess-tracker.json config is
--- untouched -- this table only exists for chess-tracker serve.
+-- of asking for on every run. The CLI's own ~/.chess-mistake-coach.json config is
+-- untouched -- this table only exists for chess-mistake-coach serve.
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS puzzles (
     -- opponent's forced setup move (auto-applied to reach the real puzzle
     -- position); the solver's own moves start at moves[1] and alternate
     -- with more auto-played opponent replies from there. See
-    -- chess_tracker/puzzles.py for the walk logic.
+    -- chess_mistake_coach/puzzles.py for the walk logic.
     moves             TEXT NOT NULL,
     rating            INTEGER,
     rating_deviation  INTEGER,
@@ -160,7 +160,7 @@ CREATE TABLE IF NOT EXISTS puzzle_source_stats (
     updated_at   TEXT
 );
 
--- Engine verdicts on opening positions (chess_tracker/position_cache.py), so
+-- Engine verdicts on opening positions (chess_mistake_coach/position_cache.py), so
 -- the same position isn't analysed again for every game that reaches it. Only
 -- a speed-up: safe to delete, and left out of the default backup.
 CREATE TABLE IF NOT EXISTS position_evals (
@@ -172,7 +172,7 @@ CREATE TABLE IF NOT EXISTS position_evals (
     PRIMARY KEY (engine, epd, depth)
 ) WITHOUT ROWID;
 
--- Gamification (chess_tracker/gamification.py). All keyed by username, none
+-- Gamification (chess_mistake_coach/gamification.py). All keyed by username, none
 -- with a FK to another table, same reasoning as practice_attempts.
 
 -- One row per player. current_streak can be stale until the next activity;

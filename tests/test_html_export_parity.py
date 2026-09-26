@@ -5,9 +5,9 @@ tested (golden test, real-database diff) and treated here as the oracle.
 """
 from collections import Counter, defaultdict
 
-from chess_tracker.db import open_db, save_game
-from chess_tracker.html_export import build_dashboard_data
-from chess_tracker.reports import SERIOUS, report_model
+from chess_mistake_coach.db import open_db, save_game
+from chess_mistake_coach.html_export import build_dashboard_data
+from chess_mistake_coach.reports import SERIOUS, report_model
 
 
 def _game(url, username, end_time, date, time_class, colour, rating, eco,

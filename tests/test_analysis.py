@@ -1,7 +1,7 @@
 import chess
 import chess.engine
 
-from chess_tracker.analysis import analyse_bot_game, classify, game_phase, resolve_colour, score_cp
+from chess_mistake_coach.analysis import analyse_bot_game, classify, game_phase, resolve_colour, score_cp
 
 
 def test_score_cp_from_pov_of_the_side_it_favours():

@@ -6,10 +6,10 @@ from unittest.mock import MagicMock
 import chess
 from fastapi.testclient import TestClient
 
-from chess_tracker.analysis_runner import DEFAULT_PARALLEL_THRESHOLD, DEFAULT_WORKERS
-from chess_tracker.db import get_settings, open_db, save_game, set_settings
-from chess_tracker.web.app import create_app
-from chess_tracker.web.jobs import (BIG_UPDATE_THRESHOLD, FIRST_RUN_GAME_LIMIT,
+from chess_mistake_coach.analysis_runner import DEFAULT_PARALLEL_THRESHOLD, DEFAULT_WORKERS
+from chess_mistake_coach.db import get_settings, open_db, save_game, set_settings
+from chess_mistake_coach.web.app import create_app
+from chess_mistake_coach.web.jobs import (BIG_UPDATE_THRESHOLD, FIRST_RUN_GAME_LIMIT,
                                     JobAlreadyRunningError, SECONDS_PER_GAME)
 
 REC = {
@@ -327,7 +327,7 @@ def test_practice_attempt_logs_hint_used_flag(tmp_path):
 
 
 def test_practice_attempt_hint_free_retry_flips_position_to_solved(tmp_path):
-    from chess_tracker.reports import practice_stats
+    from chess_mistake_coach.reports import practice_stats
 
     db_path = _practice_seeded_db(tmp_path)
     client = TestClient(create_app(db_path))
@@ -488,7 +488,7 @@ def test_onboarding_missing_email_redirects_to_settings(tmp_path):
 
 
 def test_onboarding_missing_engine_shows_inline_error(tmp_path, monkeypatch):
-    monkeypatch.setattr("chess_tracker.web.routes_pages.find_engine", lambda: None)
+    monkeypatch.setattr("chess_mistake_coach.web.routes_pages.find_engine", lambda: None)
     client = TestClient(create_app(_empty_db(tmp_path)))
     r = client.post("/account", data={
         "username": "newplayer", "email": "you@example.com", "start_job": "1",
@@ -572,7 +572,7 @@ def test_start_job_requires_email(tmp_path):
 def test_start_job_reports_missing_engine(tmp_path, monkeypatch):
     # no engine_path passed to create_app(), and find_engine() monkeypatched
     # to simulate a machine with no Stockfish installed
-    monkeypatch.setattr("chess_tracker.web.routes_pages.find_engine", lambda: None)
+    monkeypatch.setattr("chess_mistake_coach.web.routes_pages.find_engine", lambda: None)
     client = TestClient(create_app(_seeded_db(tmp_path)))
     r = client.post("/jobs", data={"user": "bob", "email": "you@example.com"})
     assert r.status_code == 400
@@ -609,7 +609,7 @@ def test_cancelling_does_not_free_the_slot_until_the_thread_actually_exits(tmp_p
         started.set()
         release.wait(timeout=2)  # only "notices" cancellation once released
 
-    monkeypatch.setattr("chess_tracker.web.jobs.run_analysis", slow_run_analysis)
+    monkeypatch.setattr("chess_mistake_coach.web.jobs.run_analysis", slow_run_analysis)
     client = TestClient(app, follow_redirects=False)
 
     r1 = client.post("/jobs", data={"user": "alice", "email": "you@example.com"})
@@ -936,8 +936,8 @@ def test_achievements_page_others_column_uses_pooled_mistakes(tmp_path):
 # ---- update checker -----------------------------------------------------
 
 def test_update_check_returns_available_true(tmp_path, monkeypatch):
-    monkeypatch.setattr("chess_tracker.web.updater.find_git", lambda: "/usr/bin/git")
-    monkeypatch.setattr("chess_tracker.web.updater.check_for_update",
+    monkeypatch.setattr("chess_mistake_coach.web.updater.find_git", lambda: "/usr/bin/git")
+    monkeypatch.setattr("chess_mistake_coach.web.updater.check_for_update",
                         lambda git_path, repo: {"available": True, "reason": None})
     client = TestClient(create_app(_seeded_db(tmp_path)))
     r = client.get("/api/update/check")
@@ -946,7 +946,7 @@ def test_update_check_returns_available_true(tmp_path, monkeypatch):
 
 
 def test_update_check_returns_available_false_when_git_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr("chess_tracker.web.updater.find_git", lambda: None)
+    monkeypatch.setattr("chess_mistake_coach.web.updater.find_git", lambda: None)
     client = TestClient(create_app(_seeded_db(tmp_path)))
     r = client.get("/api/update/check")
     assert r.json() == {"available": False}
@@ -954,13 +954,13 @@ def test_update_check_returns_available_false_when_git_missing(tmp_path, monkeyp
 
 def test_update_check_is_cached_within_the_ttl(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr("chess_tracker.web.updater.find_git", lambda: "/usr/bin/git")
+    monkeypatch.setattr("chess_mistake_coach.web.updater.find_git", lambda: "/usr/bin/git")
 
     def fake_check(git_path, repo):
         calls.append(1)
         return {"available": False, "reason": None}
 
-    monkeypatch.setattr("chess_tracker.web.updater.check_for_update", fake_check)
+    monkeypatch.setattr("chess_mistake_coach.web.updater.check_for_update", fake_check)
     client = TestClient(create_app(_seeded_db(tmp_path)))
     client.get("/api/update/check")
     client.get("/api/update/check")
@@ -982,8 +982,8 @@ def test_home_hub_includes_update_banner_markup(tmp_path):
 
 
 def test_update_apply_reports_success(tmp_path, monkeypatch):
-    monkeypatch.setattr("chess_tracker.web.updater.find_git", lambda: "/usr/bin/git")
-    monkeypatch.setattr("chess_tracker.web.updater.apply_update",
+    monkeypatch.setattr("chess_mistake_coach.web.updater.find_git", lambda: "/usr/bin/git")
+    monkeypatch.setattr("chess_mistake_coach.web.updater.apply_update",
                         lambda git_path, repo: {"ok": True, "message": "Updated!"})
     client = TestClient(create_app(_seeded_db(tmp_path)))
     r = client.post("/api/update/apply")
@@ -992,8 +992,8 @@ def test_update_apply_reports_success(tmp_path, monkeypatch):
 
 
 def test_update_apply_reports_failure(tmp_path, monkeypatch):
-    monkeypatch.setattr("chess_tracker.web.updater.find_git", lambda: "/usr/bin/git")
-    monkeypatch.setattr("chess_tracker.web.updater.apply_update",
+    monkeypatch.setattr("chess_mistake_coach.web.updater.find_git", lambda: "/usr/bin/git")
+    monkeypatch.setattr("chess_mistake_coach.web.updater.apply_update",
                         lambda git_path, repo: {"ok": False, "message": "local changes present"})
     client = TestClient(create_app(_seeded_db(tmp_path)))
     r = client.post("/api/update/apply")
@@ -1001,7 +1001,7 @@ def test_update_apply_reports_failure(tmp_path, monkeypatch):
 
 
 def test_update_apply_without_git_reports_failure(tmp_path, monkeypatch):
-    monkeypatch.setattr("chess_tracker.web.updater.find_git", lambda: None)
+    monkeypatch.setattr("chess_mistake_coach.web.updater.find_git", lambda: None)
     client = TestClient(create_app(_seeded_db(tmp_path)))
     r = client.post("/api/update/apply")
     assert r.status_code == 200
@@ -1106,7 +1106,7 @@ def test_play_move_adaptive_with_no_data_has_no_effect(tmp_path, monkeypatch):
 
 
 def test_play_move_stockfish_not_installed_degrades_gracefully(tmp_path, monkeypatch):
-    monkeypatch.setattr("chess_tracker.web.routes_api.find_engine", lambda: None)
+    monkeypatch.setattr("chess_mistake_coach.web.routes_api.find_engine", lambda: None)
     client = TestClient(create_app(_empty_db(tmp_path), engine_path=None))
     r = client.post("/api/play/move", json={
         "fen": _START_FEN, "from": "e2", "to": "e4", "engine": "stockfish", "elo": 1500,
@@ -1178,7 +1178,7 @@ def test_play_analyze_requires_moves_and_colour(tmp_path):
 
 
 def test_play_analyze_stockfish_not_installed_degrades_gracefully(tmp_path, monkeypatch):
-    monkeypatch.setattr("chess_tracker.web.routes_api.find_engine", lambda: None)
+    monkeypatch.setattr("chess_mistake_coach.web.routes_api.find_engine", lambda: None)
     client = TestClient(create_app(_empty_db(tmp_path), engine_path=None))
     r = client.post("/api/play/analyze", json={"moves": ["e2e4"], "colour": "white"})
     assert r.status_code == 503
@@ -1334,9 +1334,9 @@ def test_puzzle_attempt_does_not_log_without_practicing_user(tmp_path):
 # ---- puzzles: "get more puzzles" background import ----------------------
 
 def test_start_puzzle_import_returns_job_status(tmp_path, monkeypatch):
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.find_puzzle_source",
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.find_puzzle_source",
                         lambda: "/cached.csv")
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.import_puzzles",
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.import_puzzles",
                         lambda conn, source_path, **kwargs: None)
     client = TestClient(create_app(_empty_db(tmp_path)))
     r = client.post("/api/puzzles/import", params={"minRating": 1000, "maxRating": 2000})
@@ -1365,13 +1365,13 @@ def test_puzzle_import_cancel_404s_for_unknown_job(tmp_path):
 def test_start_puzzle_import_conflicts_when_already_running(tmp_path, monkeypatch):
     started = threading.Event()
     release = threading.Event()
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.find_puzzle_source",
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.find_puzzle_source",
                         lambda: "/cached.csv")
 
     def fake_import_puzzles(conn, source_path, **kwargs):
         started.set()
         release.wait(timeout=2)
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.import_puzzles", fake_import_puzzles)
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.import_puzzles", fake_import_puzzles)
 
     client = TestClient(create_app(_empty_db(tmp_path)))
     client.post("/api/puzzles/import", params={})

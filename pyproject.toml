@@ -1,7 +1,8 @@
 [project]
-name = "chess-error-tracker"
+name = "chess-mistake-coach"
 version = "0.1.0"
-description = "Finds the mistakes you keep making, not the ones you made yesterday."
+description = "Find the mistakes you keep making in chess and train them away: analyse your games with Stockfish, then practise, solve puzzles and play a coached game against a bot."
+keywords = ["chess", "stockfish", "chess-analysis", "chess-improvement", "chess.com", "lichess-puzzles"]
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -16,15 +17,15 @@ dev = ["pytest>=8", "httpx>=0.27"]
 web = ["fastapi>=0.110,<1", "uvicorn>=0.29,<1", "jinja2>=3.1,<4", "python-multipart>=0.0.9,<1"]
 
 [project.scripts]
-chess-tracker = "chess_tracker.cli:main"
+chess-mistake-coach = "chess_mistake_coach.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["chess_tracker", "chess_tracker.web"]
+packages = ["chess_mistake_coach", "chess_mistake_coach.web"]
 
 [tool.setuptools.package-data]
-chess_tracker = ["templates/*.html"]
-"chess_tracker.web" = ["templates/*.html"]
+chess_mistake_coach = ["templates/*.html"]
+"chess_mistake_coach.web" = ["templates/*.html"]

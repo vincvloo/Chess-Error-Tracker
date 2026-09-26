@@ -3,9 +3,9 @@ import time
 
 import pytest
 
-from chess_tracker.db import open_db
-from chess_tracker.puzzles import PuzzleImportCancelled
-from chess_tracker.web.puzzle_import import PuzzleImportAlreadyRunningError, PuzzleImportManager
+from chess_mistake_coach.db import open_db
+from chess_mistake_coach.puzzles import PuzzleImportCancelled
+from chess_mistake_coach.web.puzzle_import import PuzzleImportAlreadyRunningError, PuzzleImportManager
 
 
 def _wait_for(mgr: PuzzleImportManager, job_id: str, timeout: float = 2.0) -> dict:
@@ -28,7 +28,7 @@ def test_start_job_reaches_done_state_reusing_a_cached_source(tmp_path, monkeypa
     """When find_puzzle_source() already finds a cached CSV, no download
     should happen at all -- straight to importing."""
     calls = []
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.find_puzzle_source",
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.find_puzzle_source",
                         lambda: "/already/cached.csv")
 
     def fake_import_puzzles(conn, source_path, **kwargs):
@@ -36,7 +36,7 @@ def test_start_job_reaches_done_state_reusing_a_cached_source(tmp_path, monkeypa
         if kwargs.get("progress_cb"):
             kwargs["progress_cb"](100, 10)
         return None
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.import_puzzles", fake_import_puzzles)
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.import_puzzles", fake_import_puzzles)
 
     mgr = _manager(tmp_path)
     status = mgr.start_job(min_rating=1000, max_rating=2000)
@@ -49,7 +49,7 @@ def test_start_job_reaches_done_state_reusing_a_cached_source(tmp_path, monkeypa
 
 
 def test_start_job_downloads_when_no_source_is_cached(tmp_path, monkeypatch):
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.find_puzzle_source", lambda: None)
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.find_puzzle_source", lambda: None)
     download_calls = []
 
     def fake_download(progress_cb=None, cancel_event=None):
@@ -57,8 +57,8 @@ def test_start_job_downloads_when_no_source_is_cached(tmp_path, monkeypatch):
         if progress_cb:
             progress_cb(500, 1000)
         return "/freshly/downloaded.csv"
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.download_puzzle_source", fake_download)
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.import_puzzles",
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.download_puzzle_source", fake_download)
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.import_puzzles",
                         lambda conn, source_path, **kwargs: None)
 
     mgr = _manager(tmp_path)
@@ -72,13 +72,13 @@ def test_start_job_downloads_when_no_source_is_cached(tmp_path, monkeypatch):
 def test_start_job_rejects_concurrent_imports(tmp_path, monkeypatch):
     started = threading.Event()
     release = threading.Event()
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.find_puzzle_source",
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.find_puzzle_source",
                         lambda: "/cached.csv")
 
     def fake_import_puzzles(conn, source_path, **kwargs):
         started.set()
         release.wait(timeout=2)
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.import_puzzles", fake_import_puzzles)
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.import_puzzles", fake_import_puzzles)
 
     mgr = _manager(tmp_path)
     mgr.start_job(min_rating=None, max_rating=None)
@@ -91,13 +91,13 @@ def test_start_job_rejects_concurrent_imports(tmp_path, monkeypatch):
 
 
 def test_cancel_reports_cancelled_state(tmp_path, monkeypatch):
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.find_puzzle_source",
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.find_puzzle_source",
                         lambda: "/cached.csv")
 
     def fake_import_puzzles(conn, source_path, cancel_event=None, **kwargs):
         cancel_event.wait(timeout=2)
         raise PuzzleImportCancelled()
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.import_puzzles", fake_import_puzzles)
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.import_puzzles", fake_import_puzzles)
 
     mgr = _manager(tmp_path)
     status = mgr.start_job(min_rating=None, max_rating=None)
@@ -117,13 +117,13 @@ def test_get_status_unknown_job_returns_none(tmp_path):
 def test_get_active_job_id_reflects_running_and_finished_state(tmp_path, monkeypatch):
     started = threading.Event()
     release = threading.Event()
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.find_puzzle_source",
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.find_puzzle_source",
                         lambda: "/cached.csv")
 
     def fake_import_puzzles(conn, source_path, **kwargs):
         started.set()
         release.wait(timeout=2)
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.import_puzzles", fake_import_puzzles)
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.import_puzzles", fake_import_puzzles)
 
     mgr = _manager(tmp_path)
     assert mgr.get_active_job_id() is None
@@ -137,12 +137,12 @@ def test_get_active_job_id_reflects_running_and_finished_state(tmp_path, monkeyp
 
 
 def test_job_error_state_captures_unexpected_exceptions(tmp_path, monkeypatch):
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.find_puzzle_source",
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.find_puzzle_source",
                         lambda: "/cached.csv")
 
     def fake_import_puzzles(conn, source_path, **kwargs):
         raise RuntimeError("disk is full")
-    monkeypatch.setattr("chess_tracker.web.puzzle_import.import_puzzles", fake_import_puzzles)
+    monkeypatch.setattr("chess_mistake_coach.web.puzzle_import.import_puzzles", fake_import_puzzles)
 
     mgr = _manager(tmp_path)
     status = mgr.start_job(min_rating=None, max_rating=None)

@@ -69,7 +69,7 @@ class PlayEngineManager:
 
     def close(self) -> None:
         """Terminate any open engine process. Called on app shutdown so
-        chess-tracker serve doesn't leak a stockfish.exe/lc0.exe process."""
+        chess-mistake-coach serve doesn't leak a stockfish.exe/lc0.exe process."""
         with self._lock:
             self._close_locked()
 

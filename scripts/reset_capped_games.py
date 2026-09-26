@@ -1,7 +1,7 @@
 """
 One-off maintenance script: mark every game that contains at least one
 mistake capped at the old cp_loss ceiling (2000) as un-analysed, so the next
-normal `chess-tracker` run re-runs Stockfish on exactly those games and
+normal `chess-mistake-coach` run re-runs Stockfish on exactly those games and
 stores fresh cp_loss values under the new, higher cap.
 
 Does NOT touch the network or Stockfish itself -- it only resets `depth` to
@@ -10,13 +10,13 @@ Does NOT touch the network or Stockfish itself -- it only resets `depth` to
 cleanly when that happens, so this is safe to run against the live database.
 
 Usage:
-    chess-tracker's venv python  scripts/reset_capped_games.py [--db PATH] [--dry-run]
+    chess-mistake-coach's venv python  scripts/reset_capped_games.py [--db PATH] [--dry-run]
 
 Then re-run your normal fetch+analyse command (no --report-only) for each
 affected user -- games already at the requested depth are skipped as usual,
 so only the reset ones actually get re-analysed:
 
-    chess-tracker --user <username> --email <you@example.com> --depth 14
+    chess-mistake-coach --user <username> --email <you@example.com> --depth 14
 """
 from __future__ import annotations
 
@@ -25,8 +25,8 @@ import sys
 
 sys.path.insert(0, ".")
 
-from chess_tracker.cli import DEFAULT_DB  # noqa: E402
-from chess_tracker.db import open_db  # noqa: E402
+from chess_mistake_coach.cli import DEFAULT_DB  # noqa: E402
+from chess_mistake_coach.db import open_db  # noqa: E402
 
 OLD_CAP = 2000
 
@@ -67,7 +67,7 @@ def main() -> None:
 
     print(f"\nReset. Now re-run, per user, WITHOUT --report-only, e.g.:")
     for user in sorted(by_user):
-        print(f"  chess-tracker --user {user} --email you@example.com --depth 14")
+        print(f"  chess-mistake-coach --user {user} --email you@example.com --depth 14")
     print("\nGames already at that depth are skipped as usual -- only the "
          "reset ones above will actually be re-analysed.")
 

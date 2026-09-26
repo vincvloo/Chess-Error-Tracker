@@ -16,7 +16,7 @@ async def _lifespan(app: FastAPI):
     yield
     # Play mode (phase 5) is the only thing that keeps an engine process open
     # across requests (everything else opens/closes per call) -- without
-    # this, stopping `chess-tracker serve` mid-game would leak a
+    # this, stopping `chess-mistake-coach serve` mid-game would leak a
     # stockfish.exe/lc0.exe process.
     app.state.play_engine.close()
 
@@ -28,7 +28,7 @@ def create_app(db_path: str, engine_path: str | None = None) -> FastAPI:
     shared across threads). `engine_path`, if given, skips auto-detecting
     Stockfish on every job start.
     """
-    app = FastAPI(title="Chess Error Tracker", lifespan=_lifespan)
+    app = FastAPI(title="Chess Mistake Coach", lifespan=_lifespan)
     app.state.db_path = db_path
     app.state.engine_path = engine_path
     app.state.jobs = JobManager(db_path)

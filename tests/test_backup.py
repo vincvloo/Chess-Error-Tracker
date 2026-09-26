@@ -5,10 +5,10 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from chess_tracker import backup as bk
-from chess_tracker import gamification as g
-from chess_tracker.db import get_settings, open_db, save_game, set_settings
-from chess_tracker.web.app import create_app
+from chess_mistake_coach import backup as bk
+from chess_mistake_coach import gamification as g
+from chess_mistake_coach.db import get_settings, open_db, save_game, set_settings
+from chess_mistake_coach.web.app import create_app
 
 REC = {
     "url": "https://example.com/g1", "username": "alice", "end_time": 1000,
@@ -233,9 +233,9 @@ def test_cli_restore_asks_first_and_can_be_declined(tmp_path, monkeypatch):
 
 
 def test_cli_dispatches_backup_and_restore_subcommands(tmp_path, monkeypatch, capsys):
-    from chess_tracker import cli
+    from chess_mistake_coach import cli
     src = _populated(str(tmp_path / "src.db"))
-    monkeypatch.setattr("sys.argv", ["chess-tracker", "backup", "--db", src,
+    monkeypatch.setattr("sys.argv", ["chess-mistake-coach", "backup", "--db", src,
                                      "--to", str(tmp_path / "x.db")])
     cli.main()
     assert "Backup saved" in capsys.readouterr().out
@@ -263,7 +263,7 @@ def test_download_returns_a_valid_backup_file(tmp_path):
     app, db = _app(tmp_path)
     r = TestClient(app).get("/backup/download")
     assert r.status_code == 200
-    assert "chess-tracker-backup-" in r.headers["content-disposition"]
+    assert "chess-mistake-coach-backup-" in r.headers["content-disposition"]
     saved = tmp_path / "dl.db"
     saved.write_bytes(r.content)
     m = bk.read_manifest(str(saved))
@@ -296,7 +296,7 @@ def test_upload_of_a_bad_file_shows_an_error_and_changes_nothing(tmp_path):
     client = TestClient(create_app(live))
     r = client.post("/backup/restore", files={"backup": ("x.db", b"garbage" * 200)},
                     follow_redirects=True)
-    assert r.status_code == 200 and "look like a Chess Error Tracker backup" in r.text
+    assert r.status_code == 200 and "look like a Chess Mistake Coach backup" in r.text
     assert _count(live, "games") == 1
 
 

@@ -5,8 +5,8 @@ import chess
 import pytest
 import zstandard
 
-from chess_tracker.db import open_db
-from chess_tracker.puzzles import (COMMON_THEME_LABELS, COMMON_THEMES, THEME_GROUPS,
+from chess_mistake_coach.db import open_db
+from chess_mistake_coach.puzzles import (COMMON_THEME_LABELS, COMMON_THEMES, THEME_GROUPS,
                                    PuzzleImportCancelled, check_puzzle_move,
                                    download_puzzle_source, find_puzzle_source, humanize_theme,
                                    import_puzzles, parse_puzzle_row)
@@ -151,7 +151,7 @@ def test_download_puzzle_source_decompresses_the_stream_correctly(tmp_path):
     dest = str(tmp_path / "puzzles.csv")
     progress_calls = []
 
-    with patch("chess_tracker.puzzles.requests.get",
+    with patch("chess_mistake_coach.puzzles.requests.get",
               return_value=_FakeStreamedResponse(compressed)):
         result_path = download_puzzle_source(
             dest_path=dest, progress_cb=lambda d, t: progress_calls.append((d, t)))
@@ -170,7 +170,7 @@ def test_download_puzzle_source_leaves_no_partial_file_name_as_the_result(tmp_pa
     compressed = zstandard.ZstdCompressor().compress(original)
     dest = str(tmp_path / "puzzles.csv")
 
-    with patch("chess_tracker.puzzles.requests.get",
+    with patch("chess_mistake_coach.puzzles.requests.get",
               return_value=_FakeStreamedResponse(compressed)):
         download_puzzle_source(dest_path=dest)
 
@@ -188,7 +188,7 @@ def test_find_puzzle_source_prefers_env_var_override(tmp_path, monkeypatch):
 
 def test_find_puzzle_source_returns_none_when_nothing_is_cached(monkeypatch):
     monkeypatch.delenv("CHESS_PUZZLE_SOURCE", raising=False)
-    monkeypatch.setattr("chess_tracker.puzzles._DEFAULT_SOURCE_PATH",
+    monkeypatch.setattr("chess_mistake_coach.puzzles._DEFAULT_SOURCE_PATH",
                         "/definitely/does/not/exist.csv")
     assert find_puzzle_source() is None
 
@@ -199,7 +199,7 @@ def test_download_puzzle_source_raises_when_cancelled_mid_stream(tmp_path):
     already_cancelled = threading.Event()
     already_cancelled.set()
 
-    with patch("chess_tracker.puzzles.requests.get",
+    with patch("chess_mistake_coach.puzzles.requests.get",
               return_value=_FakeStreamedResponse(compressed, chunk_size=64)):
         with pytest.raises(PuzzleImportCancelled):
             download_puzzle_source(dest_path=str(tmp_path / "unused.csv"),
@@ -212,7 +212,7 @@ def test_download_puzzle_source_accepts_a_bare_relative_filename(tmp_path, monke
     monkeypatch.chdir(tmp_path)
     original = b"hello"
     compressed = zstandard.ZstdCompressor().compress(original)
-    with patch("chess_tracker.puzzles.requests.get",
+    with patch("chess_mistake_coach.puzzles.requests.get",
               return_value=_FakeStreamedResponse(compressed)):
         result = download_puzzle_source(dest_path="bare.csv")
     assert result == "bare.csv"

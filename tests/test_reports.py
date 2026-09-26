@@ -1,7 +1,7 @@
 import sqlite3
 
-from chess_tracker.db import open_db, save_game
-from chess_tracker.reports import (
+from chess_mistake_coach.db import open_db, save_game
+from chess_mistake_coach.reports import (
     CLOCK_BUCKET_SQL_CASE,
     MOVE_BUCKET_SQL_CASE,
     PRACTICE_QUEUE_LIMIT,
