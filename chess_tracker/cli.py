@@ -148,6 +148,11 @@ def main() -> None:
         serve_main(sys.argv[2:])
         return
 
+    if len(sys.argv) > 1 and sys.argv[1] in ("backup", "restore"):
+        from .backup import backup_main, restore_main
+        (backup_main if sys.argv[1] == "backup" else restore_main)(sys.argv[2:])
+        return
+
     argv = sys.argv[1:]
     explicit_config = _peek_config_path(argv)
     config = load_config(explicit_config or DEFAULT_CONFIG_PATH, required=explicit_config is not None)

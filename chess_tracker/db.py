@@ -234,6 +234,8 @@ CREATE INDEX IF NOT EXISTS idx_practice_attempts_user ON practice_attempts(pract
 SETTINGS_DEFAULTS = {
     "primary_user": None, "email": "", "depth": 14, "threads": 2,
     "pause": 0.6, "min_loss": INACCURACY,
+    # When the last backup was made (ISO time, UTC), shown on the Settings page.
+    "last_backup_at": "",
     # Phase 5 (play mode): which engine/difficulty the /play form pre-fills,
     # and whether adaptive steering starts checked. Not enforced server-side
     # beyond the default -- the /play form can always override per game.

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
 import chess
 
@@ -325,7 +325,7 @@ def test_daily_solved_reflects_todays_solve_only():
     assert not g.daily_solved(conn, "alice", day)
     conn.execute("INSERT INTO puzzle_attempts (practicing_user, puzzle_id, verdict, "
                  "move_index_reached, created_at) VALUES ('alice', 'aaaaa', 'solved', 1, "
-                 "'2026-09-21T10:00:00+00:00')")
+                 "'2026-09-21T12:00:00+00:00')")
     conn.commit()
     assert g.daily_solved(conn, "alice", day)
     assert not g.daily_solved(conn, "bob", day)
@@ -358,3 +358,68 @@ def test_leaderboard_counts_attempts_made_before_gamification_existed():
                  "verdict, hint_used, created_at) VALUES ('alice', 1, 'alice', 'c', 'best', 0, 'x')")
     conn.commit()
     assert [r["username"] for r in g.leaderboard(conn)] == ["alice"]
+
+
+# ---- local time ---------------------------------------------------------------
+
+import os
+import time
+
+import pytest
+
+
+@pytest.fixture
+def timezone_of():
+    """Switch the process timezone for a test (POSIX only), then restore it."""
+    old = os.environ.get("TZ")
+
+    def use(tz):
+        os.environ["TZ"] = tz
+        time.tzset()
+
+    yield use
+    if old is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = old
+    time.tzset()
+
+
+needs_tzset = pytest.mark.skipif(not hasattr(time, "tzset"), reason="needs time.tzset (POSIX)")
+
+
+@needs_tzset
+def test_today_follows_the_local_timezone_not_utc(timezone_of):
+    timezone_of("Pacific/Kiritimati")   # UTC+14: already tomorrow when UTC says today
+    utc_today = datetime.now(timezone.utc).date()
+    assert g._today() >= utc_today
+    timezone_of("Pacific/Pago_Pago")    # UTC-11: still yesterday for hours after UTC midnight
+    assert g._today() <= utc_today
+
+
+@needs_tzset
+def test_evening_practice_counts_for_the_local_day(timezone_of):
+    # 02:30 UTC on the 22nd is still the evening of the 21st in Los Angeles.
+    timezone_of("America/Los_Angeles")
+    conn = _conn()
+    conn.execute("INSERT INTO puzzle_attempts (practicing_user, puzzle_id, verdict, "
+                 "move_index_reached, created_at) VALUES ('alice', 'p', 'solved', 1, "
+                 "'2026-09-22T02:30:00+00:00')")
+    conn.commit()
+    days = g.activity_days(conn, "alice", days=3, today=date(2026, 9, 22))
+    assert {d["date"]: d["active"] for d in days} == {
+        "2026-09-20": False, "2026-09-21": True, "2026-09-22": False}
+
+
+@needs_tzset
+def test_daily_solved_uses_the_local_day(timezone_of):
+    timezone_of("America/Los_Angeles")
+    conn = _conn()
+    _add_puzzle(conn)
+    day = date(2026, 9, 21)
+    g.get_or_assign_daily_puzzle(conn, day)
+    conn.execute("INSERT INTO puzzle_attempts (practicing_user, puzzle_id, verdict, "
+                 "move_index_reached, created_at) VALUES ('alice', 'aaaaa', 'solved', 1, "
+                 "'2026-09-22T02:30:00+00:00')")
+    conn.commit()
+    assert g.daily_solved(conn, "alice", day)
