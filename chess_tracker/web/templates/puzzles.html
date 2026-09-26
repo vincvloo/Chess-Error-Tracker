@@ -266,6 +266,7 @@ if (MODE === "rush") {
 }
 
 async function submitAttempt(from, to, promotion) {
+  const before = currentFen;   // the position this attempt is made from
   attempted = true;
   clearHighlights();
   const feedback = document.getElementById("feedback");
@@ -287,9 +288,17 @@ async function submitAttempt(from, to, promotion) {
     return;
   }
 
-  currentFen = result.fen;
   selected = null;
-  drawBoard(currentFen);
+  if (result.correct) {
+    currentFen = result.fen;
+    drawBoard(currentFen);
+  } else {
+    // Show the position you were in, with the right move (green) and yours (red) drawn on it.
+    currentFen = before;
+    drawBoard(currentFen);
+    showArrow(result.bestUci, "best");
+    showArrow(result.yourUci, "yours");
+  }
   showBadges(result.newBadges);
 
   if (!result.correct) {

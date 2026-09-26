@@ -13,6 +13,9 @@
 #feedback.alsofine { color: #c9a227; }
 #feedback.wrong { color: var(--danger); }
 #feedback.thinking { color: var(--muted); font-style: italic; }
+#lesson { margin: 0 0 12px; font-size: 13px; color: var(--muted); min-height: 0; }
+#lesson b { color: var(--text); }
+
 .practicenav { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; align-items: center; }
 .practicenav > * { margin-top: 0; }
 .ownertag { font-weight: 600; color: var(--accent); }
@@ -75,6 +78,7 @@
 
   {{ board_markup() }}
   <div id="feedback" role="status" aria-live="polite"></div>
+  <div id="lesson" role="status" aria-live="polite"></div>
   <div id="badgeToast" class="badgetoast" role="status" aria-live="polite"></div>
 
   <div class="practicenav">
@@ -131,22 +135,37 @@ async function submitAttempt(from, to, promotion) {
   showBadgeToast(result.newBadges, document.getElementById("badgeToast"));
 
   const hintNote = hintUsed ? " (hint used)" : "";
+  selected = null;
   if (result.verdict === "best") {
     feedback.textContent = "Correct! " + result.yourSan + " was the best move." + hintNote;
     feedback.className = "correct";
     currentFen = result.yourFen;
-  } else if (result.verdict === "also_fine") {
-    feedback.textContent = result.yourSan + " wasn't the top choice (" + result.bestSan +
-      " was), but the engine says it's still fine — about " + result.yourCpLoss + "cp behind." + hintNote;
-    feedback.className = "alsofine";
-    currentFen = result.yourFen;
+    drawBoard(currentFen);
   } else {
-    feedback.textContent = "You played " + result.yourSan + " — the best move was " + result.bestSan + ".";
-    feedback.className = "wrong";
-    currentFen = result.bestFen;
+    // Stay on the original position and draw the moves on it: green is the
+    // best move, and yours is amber if the engine says it was still fine, red if not.
+    const fine = result.verdict === "also_fine";
+    if (fine) {
+      feedback.textContent = result.yourSan + " wasn't the top choice (" + result.bestSan +
+        " was), but the engine says it's still fine — about " + result.yourCpLoss + "cp behind." + hintNote;
+      feedback.className = "alsofine";
+    } else {
+      feedback.textContent = "You played " + result.yourSan + " — the best move was " + result.bestSan + ".";
+      feedback.className = "wrong";
+    }
+    currentFen = DATA.fen;
+    drawBoard(currentFen);
+    showArrow(result.bestUci, "best");
+    showArrow(result.yourUci, fine ? "ok" : "yours");
   }
-  selected = null;
-  drawBoard(currentFen);
+  if (result.lesson) {
+    const lesson = document.getElementById("lesson");
+    lesson.textContent = "";
+    const head = document.createElement("b");
+    head.textContent = "In the game: " + result.category + ". ";
+    lesson.appendChild(head);
+    lesson.appendChild(document.createTextNode(result.lesson));
+  }
 }
 
 function resetPosition() {
@@ -158,6 +177,7 @@ function resetPosition() {
   document.getElementById("promo").classList.remove("show");
   document.getElementById("feedback").textContent = "";
   document.getElementById("feedback").className = "";
+  document.getElementById("lesson").textContent = "";
   currentFen = DATA.fen;
   drawBoard(currentFen);
 }
