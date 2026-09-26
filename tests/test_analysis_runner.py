@@ -3,9 +3,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from chess_tracker.analysis_runner import run_analysis
-from chess_tracker.chesscom import ChessComError
-from chess_tracker.db import open_db, save_game
+from chess_mistake_coach.analysis_runner import run_analysis
+from chess_mistake_coach.chesscom import ChessComError
+from chess_mistake_coach.db import open_db, save_game
 
 
 def _fake_rec(url, username):
@@ -35,8 +35,8 @@ def test_run_analysis_saves_games_and_records_a_run(mock_popen):
         return _fake_rec(game_json["url"], user), [_fake_mistake(game_json["url"], user)]
 
     conn = open_db(":memory:")
-    with patch("chess_tracker.analysis_runner.collect_games", return_value=games), \
-         patch("chess_tracker.analysis_runner.analyse_game", side_effect=fake_analyse):
+    with patch("chess_mistake_coach.analysis_runner.collect_games", return_value=games), \
+         patch("chess_mistake_coach.analysis_runner.analyse_game", side_effect=fake_analyse):
         run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,
                      threads=2, pause=0, quiet=True)
 
@@ -57,8 +57,8 @@ def test_run_analysis_calls_progress_cb_per_game(mock_popen):
 
     calls = []
     conn = open_db(":memory:")
-    with patch("chess_tracker.analysis_runner.collect_games", return_value=games), \
-         patch("chess_tracker.analysis_runner.analyse_game", side_effect=fake_analyse):
+    with patch("chess_mistake_coach.analysis_runner.collect_games", return_value=games), \
+         patch("chess_mistake_coach.analysis_runner.analyse_game", side_effect=fake_analyse):
         run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,
                      threads=2, pause=0, quiet=True,
                      progress_cb=lambda u, i, t: calls.append((u, i, t)))
@@ -83,8 +83,8 @@ def test_run_analysis_respects_cancel_event(mock_popen):
             cancel_event.set()
 
     conn = open_db(":memory:")
-    with patch("chess_tracker.analysis_runner.collect_games", return_value=games), \
-         patch("chess_tracker.analysis_runner.analyse_game", side_effect=fake_analyse):
+    with patch("chess_mistake_coach.analysis_runner.collect_games", return_value=games), \
+         patch("chess_mistake_coach.analysis_runner.analyse_game", side_effect=fake_analyse):
         run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,
                      threads=2, pause=0, quiet=True, progress_cb=progress_cb,
                      cancel_event=cancel_event)
@@ -103,8 +103,8 @@ def test_run_analysis_swallows_keyboardinterrupt_and_returns_normally(mock_popen
         raise KeyboardInterrupt
 
     conn = open_db(":memory:")
-    with patch("chess_tracker.analysis_runner.collect_games", return_value=games), \
-         patch("chess_tracker.analysis_runner.analyse_game", side_effect=fake_analyse):
+    with patch("chess_mistake_coach.analysis_runner.collect_games", return_value=games), \
+         patch("chess_mistake_coach.analysis_runner.analyse_game", side_effect=fake_analyse):
         run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,
                      threads=2, pause=0, quiet=True)  # must not raise
 
@@ -127,8 +127,8 @@ def test_run_analysis_skips_already_analysed_games(mock_popen):
         analysed_urls.append(game_json["url"])
         return _fake_rec(game_json["url"], user), []
 
-    with patch("chess_tracker.analysis_runner.collect_games", return_value=games), \
-         patch("chess_tracker.analysis_runner.analyse_game", side_effect=fake_analyse):
+    with patch("chess_mistake_coach.analysis_runner.collect_games", return_value=games), \
+         patch("chess_mistake_coach.analysis_runner.analyse_game", side_effect=fake_analyse):
         run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,
                      threads=2, pause=0, quiet=True)
 
@@ -139,7 +139,7 @@ def test_run_analysis_skips_already_analysed_games(mock_popen):
 def test_run_analysis_propagates_chesscomerror(mock_popen):
     mock_popen.return_value = MagicMock()
     conn = open_db(":memory:")
-    with patch("chess_tracker.analysis_runner.collect_games",
+    with patch("chess_mistake_coach.analysis_runner.collect_games",
                side_effect=ChessComError("No such Chess.com user: bogus")):
         with pytest.raises(ChessComError, match="No such Chess.com user"):
             run_analysis(conn, ["bogus"], "you@example.com", "/fake/stockfish", depth=14,

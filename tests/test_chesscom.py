@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from chess_tracker.chesscom import ChessComClient, ChessComError
+from chess_mistake_coach.chesscom import ChessComClient, ChessComError
 
 
 def _client() -> ChessComClient:
@@ -22,7 +22,7 @@ def _client() -> ChessComClient:
 def test_archives_raises_chesscomerror_on_404():
     client = _client()
     response = MagicMock(status_code=404)
-    with patch("chess_tracker.chesscom.requests.get", return_value=response):
+    with patch("chess_mistake_coach.chesscom.requests.get", return_value=response):
         with pytest.raises(ChessComError, match="No such Chess.com user"):
             client.archives("nosuchuser")
 
@@ -30,7 +30,7 @@ def test_archives_raises_chesscomerror_on_404():
 def test_archives_raises_chesscomerror_on_403():
     client = _client()
     response = MagicMock(status_code=403)
-    with patch("chess_tracker.chesscom.requests.get", return_value=response):
+    with patch("chess_mistake_coach.chesscom.requests.get", return_value=response):
         with pytest.raises(ChessComError, match="403"):
             client.archives("someuser")
 
@@ -41,6 +41,6 @@ def test_archives_returns_list_on_success():
     response.json.return_value = {
         "archives": ["https://api.chess.com/pub/player/someuser/games/2024/01"]
     }
-    with patch("chess_tracker.chesscom.requests.get", return_value=response):
+    with patch("chess_mistake_coach.chesscom.requests.get", return_value=response):
         result = client.archives("someuser")
     assert result == ["https://api.chess.com/pub/player/someuser/games/2024/01"]

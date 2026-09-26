@@ -44,7 +44,7 @@ class BackupError(Exception):
 def app_version() -> str:
     try:
         from importlib.metadata import version
-        return version("chess-error-tracker")
+        return version("chess-mistake-coach")
     except Exception:
         return "unknown"
 
@@ -55,7 +55,7 @@ def default_backup_dir(db_path: str) -> str:
 
 def backup_filename(full: bool = False, when: datetime | None = None) -> str:
     when = when or datetime.now()
-    return f"chess-tracker-backup-{when:%Y%m%d-%H%M%S}{'-full' if full else ''}.db"
+    return f"chess-mistake-coach-backup-{when:%Y%m%d-%H%M%S}{'-full' if full else ''}.db"
 
 
 def _columns(conn: sqlite3.Connection, schema: str, table: str) -> list[str]:
@@ -149,9 +149,9 @@ def read_manifest(path: str) -> dict:
             if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise BackupError("That file is damaged (it failed SQLite's integrity check).")
         except sqlite3.DatabaseError:
-            raise BackupError("That doesn't look like a Chess Error Tracker backup.")
+            raise BackupError("That doesn't look like a Chess Mistake Coach backup.")
         if not (_has_table(conn, "main", "games") and _has_table(conn, "main", "mistakes")):
-            raise BackupError("That doesn't look like a Chess Error Tracker backup "
+            raise BackupError("That doesn't look like a Chess Mistake Coach backup "
                               "(no games or mistakes tables).")
         meta = {}
         if _has_table(conn, "main", META_TABLE):
@@ -216,9 +216,9 @@ def describe(manifest: dict) -> str:
 
 
 def backup_main(argv: list[str]) -> None:
-    """`chess-tracker backup ...`"""
+    """`chess-mistake-coach backup ...`"""
     from .cli import DEFAULT_DB
-    p = argparse.ArgumentParser(prog="chess-tracker backup",
+    p = argparse.ArgumentParser(prog="chess-mistake-coach backup",
                                 description="Save a portable copy of your data.")
     p.add_argument("--db", default=DEFAULT_DB, help="Database to back up.")
     p.add_argument("--to", help="Where to write it (default: a backups/ folder next to the database).")
@@ -234,9 +234,9 @@ def backup_main(argv: list[str]) -> None:
 
 
 def restore_main(argv: list[str]) -> None:
-    """`chess-tracker restore FILE ...`"""
+    """`chess-mistake-coach restore FILE ...`"""
     from .cli import DEFAULT_DB
-    p = argparse.ArgumentParser(prog="chess-tracker restore",
+    p = argparse.ArgumentParser(prog="chess-mistake-coach restore",
                                 description="Replace your data with a backup.")
     p.add_argument("file", help="The backup file.")
     p.add_argument("--db", default=DEFAULT_DB, help="Database to restore into.")

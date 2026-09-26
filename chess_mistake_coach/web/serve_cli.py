@@ -1,4 +1,4 @@
-"""`chess-tracker serve` -- flag parsing and uvicorn bootstrap for the local
+"""`chess-mistake-coach serve` -- flag parsing and uvicorn bootstrap for the local
 web app. Deliberately its own small argparse setup, not a subparser bolted
 onto cli.py's build_parser(): serve's flags (--host, --port, --no-browser)
 share nothing with the fetch/report flags, and build_parser() is directly
@@ -17,7 +17,7 @@ from .browser import open_app_window
 
 
 def build_serve_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="chess-tracker serve",
+    p = argparse.ArgumentParser(prog="chess-mistake-coach serve",
                                 description="Run the local web app")
     p.add_argument("--host", default="127.0.0.1",
                    help="Interface to bind. Defaults to 127.0.0.1 -- this is "

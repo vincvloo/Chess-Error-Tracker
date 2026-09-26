@@ -30,15 +30,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from chess_tracker.analysis import INACCURACY
-from chess_tracker.analysis_runner import (
+from chess_mistake_coach.analysis import INACCURACY
+from chess_mistake_coach.analysis_runner import (
     _analyse_shard,
     _partition_games,
     _resolve_db_path,
     _save_with_retry,
     run_analysis,
 )
-from chess_tracker.db import open_db, save_game
+from chess_mistake_coach.db import open_db, save_game
 
 
 def _fake_rec(url, username):
@@ -117,7 +117,7 @@ def test_save_with_retry_succeeds_immediately_when_not_locked(tmp_path):
 def test_save_with_retry_retries_transient_lock_errors_then_succeeds(tmp_path, monkeypatch):
     conn = open_db(str(tmp_path / "t.db"))
     rec = _fake_rec("https://x/g1", "alice")
-    monkeypatch.setattr("chess_tracker.analysis_runner.time.sleep", lambda s: None)
+    monkeypatch.setattr("chess_mistake_coach.analysis_runner.time.sleep", lambda s: None)
 
     calls = []
 
@@ -127,7 +127,7 @@ def test_save_with_retry_retries_transient_lock_errors_then_succeeds(tmp_path, m
             raise sqlite3.OperationalError("database is locked")
         return save_game(c, r, m, d)
 
-    with patch("chess_tracker.analysis_runner.save_game", side_effect=flaky_save):
+    with patch("chess_mistake_coach.analysis_runner.save_game", side_effect=flaky_save):
         ok = _save_with_retry(conn, rec, [], 14, "alice", rec["url"])
 
     assert ok is True
@@ -138,9 +138,9 @@ def test_save_with_retry_retries_transient_lock_errors_then_succeeds(tmp_path, m
 def test_save_with_retry_gives_up_after_exhausting_retries(tmp_path, monkeypatch):
     conn = open_db(str(tmp_path / "t.db"))
     rec = _fake_rec("https://x/g1", "alice")
-    monkeypatch.setattr("chess_tracker.analysis_runner.time.sleep", lambda s: None)
+    monkeypatch.setattr("chess_mistake_coach.analysis_runner.time.sleep", lambda s: None)
 
-    with patch("chess_tracker.analysis_runner.save_game",
+    with patch("chess_mistake_coach.analysis_runner.save_game",
               side_effect=sqlite3.OperationalError("database is locked")):
         ok = _save_with_retry(conn, rec, [], 14, "alice", rec["url"])
 
@@ -151,9 +151,9 @@ def test_save_with_retry_gives_up_after_exhausting_retries(tmp_path, monkeypatch
 def test_save_with_retry_does_not_retry_a_non_lock_operational_error(tmp_path, monkeypatch):
     conn = open_db(str(tmp_path / "t.db"))
     rec = _fake_rec("https://x/g1", "alice")
-    monkeypatch.setattr("chess_tracker.analysis_runner.time.sleep", lambda s: None)
+    monkeypatch.setattr("chess_mistake_coach.analysis_runner.time.sleep", lambda s: None)
 
-    with patch("chess_tracker.analysis_runner.save_game",
+    with patch("chess_mistake_coach.analysis_runner.save_game",
               side_effect=sqlite3.OperationalError("no such table: games")):
         with pytest.raises(sqlite3.OperationalError):
             _save_with_retry(conn, rec, [], 14, "alice", rec["url"])
@@ -172,7 +172,7 @@ def test_analyse_shard_saves_games_and_returns_the_count(mock_popen, tmp_path):
         return _fake_rec(game_json["url"], user), []
 
     q: multiprocessing.Queue = multiprocessing.Queue()
-    with patch("chess_tracker.analysis_runner.analyse_game", side_effect=fake_analyse):
+    with patch("chess_mistake_coach.analysis_runner.analyse_game", side_effect=fake_analyse):
         new, failed = _analyse_shard(db_path, "alice", games, "/fake/stockfish", 14, 2,
                                      INACCURACY, q, 0, multiprocessing.Event())
 
@@ -194,7 +194,7 @@ def test_analyse_shard_reports_progress_via_the_queue(mock_popen, tmp_path):
         return _fake_rec(game_json["url"], user), []
 
     q: multiprocessing.Queue = multiprocessing.Queue()
-    with patch("chess_tracker.analysis_runner.analyse_game", side_effect=fake_analyse):
+    with patch("chess_mistake_coach.analysis_runner.analyse_game", side_effect=fake_analyse):
         _analyse_shard(db_path, "alice", games, "/fake/stockfish", 14, 2,
                        INACCURACY, q, 3, multiprocessing.Event())
 
@@ -222,7 +222,7 @@ def test_analyse_shard_stops_early_once_cancelled(mock_popen, tmp_path):
         return _fake_rec(game_json["url"], user), []
 
     q: multiprocessing.Queue = multiprocessing.Queue()
-    with patch("chess_tracker.analysis_runner.analyse_game", side_effect=fake_analyse):
+    with patch("chess_mistake_coach.analysis_runner.analyse_game", side_effect=fake_analyse):
         new, failed = _analyse_shard(db_path, "alice", games, "/fake/stockfish", 14, 2,
                                      INACCURACY, q, 0, cancel)
 
@@ -235,7 +235,7 @@ def test_analyse_shard_stops_early_once_cancelled(mock_popen, tmp_path):
 def test_analyse_shard_skips_a_game_that_never_saves_but_continues_the_rest(
         mock_popen, tmp_path, monkeypatch):
     mock_popen.return_value = MagicMock()
-    monkeypatch.setattr("chess_tracker.analysis_runner.time.sleep", lambda s: None)
+    monkeypatch.setattr("chess_mistake_coach.analysis_runner.time.sleep", lambda s: None)
     db_path = str(tmp_path / "shard.db")
     open_db(db_path).close()
     games = [{"url": "https://x/g1"}, {"url": "https://x/g2"}, {"url": "https://x/g3"}]
@@ -249,8 +249,8 @@ def test_analyse_shard_skips_a_game_that_never_saves_but_continues_the_rest(
         return save_game(c, rec, mistakes, depth)
 
     q: multiprocessing.Queue = multiprocessing.Queue()
-    with patch("chess_tracker.analysis_runner.analyse_game", side_effect=fake_analyse), \
-         patch("chess_tracker.analysis_runner.save_game", side_effect=flaky_save):
+    with patch("chess_mistake_coach.analysis_runner.analyse_game", side_effect=fake_analyse), \
+         patch("chess_mistake_coach.analysis_runner.save_game", side_effect=flaky_save):
         new, failed = _analyse_shard(db_path, "alice", games, "/fake/stockfish", 14, 2,
                                      INACCURACY, q, 0, multiprocessing.Event())
 
@@ -265,21 +265,21 @@ def test_analyse_shard_skips_a_game_that_never_saves_but_continues_the_rest(
 
 # ---- run_analysis()'s threshold/gating decision ------------------------
 
-@patch("chess_tracker.analysis_runner._run_parallel")
+@patch("chess_mistake_coach.analysis_runner._run_parallel")
 @patch("chess.engine.SimpleEngine.popen_uci")
 def test_run_analysis_stays_serial_below_the_threshold(mock_popen, mock_parallel, tmp_path):
     mock_popen.return_value = MagicMock()
     games = [{"url": "https://x/g1"}]
     conn = open_db(str(tmp_path / "t.db"))
-    with patch("chess_tracker.analysis_runner.collect_games", return_value=games), \
-         patch("chess_tracker.analysis_runner.analyse_game",
+    with patch("chess_mistake_coach.analysis_runner.collect_games", return_value=games), \
+         patch("chess_mistake_coach.analysis_runner.analyse_game",
               side_effect=lambda g, u, e, d, m: (_fake_rec(g["url"], u), [])):
         run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,
                      threads=2, pause=0, quiet=True, parallel_threshold=0, workers=1)
     mock_parallel.assert_not_called()
 
 
-@patch("chess_tracker.analysis_runner._run_parallel")
+@patch("chess_mistake_coach.analysis_runner._run_parallel")
 @patch("chess.engine.SimpleEngine.popen_uci")
 def test_run_analysis_goes_parallel_at_exactly_the_threshold(mock_popen, mock_parallel, tmp_path):
     # parallel_threshold is inclusive ("N games or more"), not "more than N"
@@ -288,13 +288,13 @@ def test_run_analysis_goes_parallel_at_exactly_the_threshold(mock_popen, mock_pa
     mock_parallel.return_value = (2, [])
     games = [{"url": f"https://x/g{i}"} for i in range(2)]
     conn = open_db(str(tmp_path / "t.db"))
-    with patch("chess_tracker.analysis_runner.collect_games", return_value=games):
+    with patch("chess_mistake_coach.analysis_runner.collect_games", return_value=games):
         run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,
                      threads=2, pause=0, quiet=True, parallel_threshold=2, workers=4)
     mock_parallel.assert_called_once()
 
 
-@patch("chess_tracker.analysis_runner._run_parallel")
+@patch("chess_mistake_coach.analysis_runner._run_parallel")
 @patch("chess.engine.SimpleEngine.popen_uci")
 def test_run_analysis_goes_parallel_above_the_threshold_with_a_real_db(
         mock_popen, mock_parallel, tmp_path):
@@ -302,7 +302,7 @@ def test_run_analysis_goes_parallel_above_the_threshold_with_a_real_db(
     mock_parallel.return_value = (3, [])
     games = [{"url": f"https://x/g{i}"} for i in range(5)]
     conn = open_db(str(tmp_path / "t.db"))
-    with patch("chess_tracker.analysis_runner.collect_games", return_value=games):
+    with patch("chess_mistake_coach.analysis_runner.collect_games", return_value=games):
         run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,
                      threads=2, pause=0, quiet=True, parallel_threshold=2, workers=4)
 
@@ -314,15 +314,15 @@ def test_run_analysis_goes_parallel_above_the_threshold_with_a_real_db(
     assert run_row["games_new"] == 3
 
 
-@patch("chess_tracker.analysis_runner._run_parallel")
+@patch("chess_mistake_coach.analysis_runner._run_parallel")
 @patch("chess.engine.SimpleEngine.popen_uci")
 def test_run_analysis_stays_serial_for_an_in_memory_db_even_above_threshold(
         mock_popen, mock_parallel):
     mock_popen.return_value = MagicMock()
     games = [{"url": f"https://x/g{i}"} for i in range(5)]
     conn = open_db(":memory:")
-    with patch("chess_tracker.analysis_runner.collect_games", return_value=games), \
-         patch("chess_tracker.analysis_runner.analyse_game",
+    with patch("chess_mistake_coach.analysis_runner.collect_games", return_value=games), \
+         patch("chess_mistake_coach.analysis_runner.analyse_game",
               side_effect=lambda g, u, e, d, m: (_fake_rec(g["url"], u), [])):
         run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,
                      threads=2, pause=0, quiet=True, parallel_threshold=2, workers=4)
@@ -348,8 +348,8 @@ def _fake_shard_worker(db_path, user, games, engine_path, depth, threads, min_lo
     return new, []
 
 
-@patch("chess_tracker.analysis_runner._analyse_shard", side_effect=_fake_shard_worker)
-@patch("chess_tracker.analysis_runner.ProcessPoolExecutor", ThreadPoolExecutor)
+@patch("chess_mistake_coach.analysis_runner._analyse_shard", side_effect=_fake_shard_worker)
+@patch("chess_mistake_coach.analysis_runner.ProcessPoolExecutor", ThreadPoolExecutor)
 @patch("chess.engine.SimpleEngine.popen_uci")
 def test_run_analysis_parallel_aggregates_progress_and_runs_row(
         mock_popen, mock_shard, tmp_path):
@@ -358,7 +358,7 @@ def test_run_analysis_parallel_aggregates_progress_and_runs_row(
     conn = open_db(str(tmp_path / "t.db"))
     progress_calls = []
 
-    with patch("chess_tracker.analysis_runner.collect_games", return_value=games):
+    with patch("chess_mistake_coach.analysis_runner.collect_games", return_value=games):
         run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,
                      threads=4, pause=0, quiet=True, parallel_threshold=2, workers=3,
                      progress_cb=lambda u, i, t: progress_calls.append((u, i, t)))
@@ -372,7 +372,7 @@ def test_run_analysis_parallel_aggregates_progress_and_runs_row(
     assert run_row["games_new"] == 12
 
 
-@patch("chess_tracker.analysis_runner.ProcessPoolExecutor", ThreadPoolExecutor)
+@patch("chess_mistake_coach.analysis_runner.ProcessPoolExecutor", ThreadPoolExecutor)
 @patch("chess.engine.SimpleEngine.popen_uci")
 def test_run_analysis_parallel_records_partial_progress_on_shard_failure(
         mock_popen, tmp_path):
@@ -388,8 +388,8 @@ def test_run_analysis_parallel_records_partial_progress_on_shard_failure(
                                   threads, min_loss, progress_queue, shard_index,
                                   cancel_event)
 
-    with patch("chess_tracker.analysis_runner.collect_games", return_value=games), \
-         patch("chess_tracker.analysis_runner._analyse_shard", side_effect=flaky_shard):
+    with patch("chess_mistake_coach.analysis_runner.collect_games", return_value=games), \
+         patch("chess_mistake_coach.analysis_runner._analyse_shard", side_effect=flaky_shard):
         try:
             run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,
                          threads=2, pause=0, quiet=True, parallel_threshold=2, workers=3)
@@ -412,8 +412,8 @@ def _slow_fake_shard_worker(*args, **kwargs):
     return _fake_shard_worker(*args, delay=0.05, **kwargs)
 
 
-@patch("chess_tracker.analysis_runner._analyse_shard", side_effect=_slow_fake_shard_worker)
-@patch("chess_tracker.analysis_runner.ProcessPoolExecutor", ThreadPoolExecutor)
+@patch("chess_mistake_coach.analysis_runner._analyse_shard", side_effect=_slow_fake_shard_worker)
+@patch("chess_mistake_coach.analysis_runner.ProcessPoolExecutor", ThreadPoolExecutor)
 @patch("chess.engine.SimpleEngine.popen_uci")
 def test_run_analysis_parallel_forwards_cancel_event_and_saves_partial_progress(
         mock_popen, mock_shard, tmp_path):
@@ -426,7 +426,7 @@ def test_run_analysis_parallel_forwards_cancel_event_and_saves_partial_progress(
         if i >= 5:
             cancel_event.set()
 
-    with patch("chess_tracker.analysis_runner.collect_games", return_value=games):
+    with patch("chess_mistake_coach.analysis_runner.collect_games", return_value=games):
         run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,
                      threads=4, pause=0, quiet=True, parallel_threshold=2, workers=3,
                      progress_cb=progress_cb, cancel_event=cancel_event)
@@ -441,7 +441,7 @@ def test_run_analysis_parallel_forwards_cancel_event_and_saves_partial_progress(
 
 def test_run_analysis_serial_logs_a_warning_when_a_game_cannot_be_saved(
         tmp_path, monkeypatch, caplog):
-    monkeypatch.setattr("chess_tracker.analysis_runner.time.sleep", lambda s: None)
+    monkeypatch.setattr("chess_mistake_coach.analysis_runner.time.sleep", lambda s: None)
     conn = open_db(str(tmp_path / "t.db"))
     games = [{"url": "https://x/g1"}, {"url": "https://x/g2"}]
 
@@ -454,9 +454,9 @@ def test_run_analysis_serial_logs_a_warning_when_a_game_cannot_be_saved(
         return save_game(c, rec, mistakes, depth)
 
     with patch("chess.engine.SimpleEngine.popen_uci", return_value=MagicMock()), \
-         patch("chess_tracker.analysis_runner.collect_games", return_value=games), \
-         patch("chess_tracker.analysis_runner.analyse_game", side_effect=fake_analyse), \
-         patch("chess_tracker.analysis_runner.save_game", side_effect=flaky_save), \
+         patch("chess_mistake_coach.analysis_runner.collect_games", return_value=games), \
+         patch("chess_mistake_coach.analysis_runner.analyse_game", side_effect=fake_analyse), \
+         patch("chess_mistake_coach.analysis_runner.save_game", side_effect=flaky_save), \
          caplog.at_level("WARNING"):
         run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,
                      threads=2, pause=0, quiet=True, parallel_threshold=10_000, workers=1)
@@ -466,7 +466,7 @@ def test_run_analysis_serial_logs_a_warning_when_a_game_cannot_be_saved(
     assert run_row["games_new"] == 1
 
 
-@patch("chess_tracker.analysis_runner.ProcessPoolExecutor", ThreadPoolExecutor)
+@patch("chess_mistake_coach.analysis_runner.ProcessPoolExecutor", ThreadPoolExecutor)
 @patch("chess.engine.SimpleEngine.popen_uci")
 def test_run_analysis_parallel_logs_a_warning_when_shards_report_failed_saves(
         mock_popen, tmp_path, caplog):
@@ -483,8 +483,8 @@ def test_run_analysis_parallel_logs_a_warning_when_shards_report_failed_saves(
         failed = [shard_games[0]["url"]] if shard_index == 0 else []
         return new, failed
 
-    with patch("chess_tracker.analysis_runner.collect_games", return_value=games), \
-         patch("chess_tracker.analysis_runner._analyse_shard",
+    with patch("chess_mistake_coach.analysis_runner.collect_games", return_value=games), \
+         patch("chess_mistake_coach.analysis_runner._analyse_shard",
               side_effect=fake_shard_with_one_failure), \
          caplog.at_level("WARNING"):
         run_analysis(conn, ["alice"], "you@example.com", "/fake/stockfish", depth=14,

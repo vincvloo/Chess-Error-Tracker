@@ -1,4 +1,4 @@
-# Installs Chess Error Tracker and starts the web app (Windows).
+# Installs Chess Mistake Coach and starts the web app (Windows).
 #
 #   powershell -ExecutionPolicy Bypass -File install.ps1
 #
@@ -51,13 +51,16 @@ if (-not (Test-Path $venvPython)) {
     if ($LASTEXITCODE -ne 0) { Fail "Could not create the virtual environment." }
 }
 
-Say "Installing Chess Error Tracker (this can take a minute the first time)"
+# Installed under its old name (Chess Error Tracker)? Remove that first so the old command doesn't linger.
+cmd /c "`"$venvPython`" -m pip uninstall -y chess-error-tracker >nul 2>&1"
+
+Say "Installing Chess Mistake Coach (this can take a minute the first time)"
 & $venvPython -m pip install --disable-pip-version-check --quiet -e ".[web]"
 if ($LASTEXITCODE -ne 0) { Fail "Installing the app failed. Scroll up for the pip error." }
 
 # 3. Stockfish ----------------------------------------------------------------
 function Find-Stockfish {
-    $found = & $venvPython -c "from chess_tracker.engine import find_engine; print(find_engine() or '')"
+    $found = & $venvPython -c "from chess_mistake_coach.engine import find_engine; print(find_engine() or '')"
     return "$found".Trim()
 }
 
@@ -79,9 +82,9 @@ if (-not $SkipStockfish) {
 
 # 4. Start ---------------------------------------------------------------------
 if ($NoLaunch) {
-    Say "Done. Start the app any time with: .venvs\chess\Scripts\chess-tracker serve"
+    Say "Done. Start the app any time with: .venvs\chess\Scripts\chess-mistake-coach serve"
     exit 0
 }
 
 Say "Starting the app (press Ctrl+C in this window to stop it)"
-& (Join-Path $venv "Scripts\chess-tracker.exe") serve
+& (Join-Path $venv "Scripts\chess-mistake-coach.exe") serve

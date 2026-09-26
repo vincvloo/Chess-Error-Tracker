@@ -72,7 +72,7 @@ class PuzzleImportManager:
             self._cancel_events[job_id] = cancel_event
 
         thread = threading.Thread(
-            target=self._run, name=f"chess-tracker-puzzle-import-{job_id}",
+            target=self._run, name=f"chess-mistake-coach-puzzle-import-{job_id}",
             args=(job_id, min_rating, max_rating, min_plays, themes, cancel_event),
             daemon=True)
         thread.start()

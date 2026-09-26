@@ -33,10 +33,10 @@ PUZZLE_SOURCE_URL = "https://database.lichess.org/lichess_db_puzzle.csv.zst"
 
 # Same discovery convention as engine.find_engine()/find_lc0(): an explicit
 # env var override, else a default cache location -- here, a dotfolder next
-# to CLI's own ~/.chess-tracker.json (see cli.py's DEFAULT_CONFIG_PATH), not
+# to CLI's own ~/.chess-mistake-coach.json (see cli.py's DEFAULT_CONFIG_PATH), not
 # inside the project directory. Unlike the sqlite db (small, gitignored),
 # this is a ~1.8GB plain-text cache with no reason to live next to the code.
-_DEFAULT_SOURCE_DIR = os.path.join(os.path.expanduser("~"), ".chess-tracker", "puzzles")
+_DEFAULT_SOURCE_DIR = os.path.join(os.path.expanduser("~"), ".chess-mistake-coach", "puzzles")
 _DEFAULT_SOURCE_PATH = os.path.join(_DEFAULT_SOURCE_DIR, "lichess_db_puzzle.csv")
 
 _DOWNLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB read/decompress chunks

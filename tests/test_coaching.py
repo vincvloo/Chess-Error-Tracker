@@ -7,9 +7,9 @@ import chess.engine
 import pytest
 from fastapi.testclient import TestClient
 
-from chess_tracker import analysis, coaching
-from chess_tracker.db import open_db
-from chess_tracker.web.app import create_app
+from chess_mistake_coach import analysis, coaching
+from chess_mistake_coach.db import open_db
+from chess_mistake_coach.web.app import create_app
 from test_web_routes import (_empty_db, _fake_engine_path, _mock_analyze_engine,
                              _practice_seeded_db, _puzzle_seeded_db)
 
@@ -98,7 +98,7 @@ def test_coach_reports_an_illegal_move_without_calling_the_engine(tmp_path, monk
 
 
 def test_coach_degrades_gracefully_without_stockfish(tmp_path, monkeypatch):
-    monkeypatch.setattr("chess_tracker.web.routes_api.find_engine", lambda: None)
+    monkeypatch.setattr("chess_mistake_coach.web.routes_api.find_engine", lambda: None)
     client = TestClient(create_app(_empty_db(tmp_path), engine_path=None))
     r = client.post("/api/play/coach", json={"fen": START, "from": "e2", "to": "e4"})
     assert r.status_code == 503

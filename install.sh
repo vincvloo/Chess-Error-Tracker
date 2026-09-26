@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs Chess Error Tracker and starts the web app (macOS and Linux).
+# Installs Chess Mistake Coach and starts the web app (macOS and Linux).
 #
 #   bash install.sh
 #
@@ -45,12 +45,15 @@ if [ ! -x "$VENV/bin/python" ]; then
     fail "Could not create the virtual environment. On Debian/Ubuntu install the venv package: sudo apt install python3-venv"
 fi
 
-say "Installing Chess Error Tracker (this can take a minute the first time)"
+# Installed under its old name (Chess Error Tracker)? Remove that first so the old command doesn't linger.
+"$VENV/bin/python" -m pip uninstall -y chess-error-tracker >/dev/null 2>&1 || true
+
+say "Installing Chess Mistake Coach (this can take a minute the first time)"
 "$VENV/bin/python" -m pip install --disable-pip-version-check --quiet -e ".[web]"
 
 # 3. Stockfish ---------------------------------------------------------------------
 find_stockfish() {
-  "$VENV/bin/python" -c 'from chess_tracker.engine import find_engine; print(find_engine() or "")'
+  "$VENV/bin/python" -c 'from chess_mistake_coach.engine import find_engine; print(find_engine() or "")'
 }
 
 install_stockfish() {
@@ -84,9 +87,9 @@ fi
 
 # 4. Start --------------------------------------------------------------------------
 if [ "$LAUNCH" = 0 ]; then
-  say "Done. Start the app any time with: $VENV/bin/chess-tracker serve"
+  say "Done. Start the app any time with: $VENV/bin/chess-mistake-coach serve"
   exit 0
 fi
 
 say "Starting the app (press Ctrl+C to stop it)"
-exec "$VENV/bin/chess-tracker" serve
+exec "$VENV/bin/chess-mistake-coach" serve

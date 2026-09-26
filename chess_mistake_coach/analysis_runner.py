@@ -346,7 +346,7 @@ def run_analysis(conn: sqlite3.Connection, users: list[str], email: str, engine_
             if failed:
                 logger.warning(
                     f"[{user}] {len(failed)} of {len(todo)} games could not be "
-                    f"saved this run (see warnings above) -- re-run chess-tracker "
+                    f"saved this run (see warnings above) -- re-run chess-mistake-coach "
                     f"to pick them up, nothing is lost.")
 
             if cancel_event is not None and cancel_event.is_set():

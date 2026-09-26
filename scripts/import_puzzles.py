@@ -13,7 +13,7 @@ file -- rows are INSERT OR REPLACEd by puzzle_id, so this doubles as a
 top-up/refresh, not just a first-time import.
 
 Usage:
-    chess-tracker's venv python  scripts/import_puzzles.py path/to/lichess_db_puzzle.csv
+    chess-mistake-coach's venv python  scripts/import_puzzles.py path/to/lichess_db_puzzle.csv
         [--db PATH] [--min-rating N] [--max-rating N] [--min-plays N]
         [--themes fork,pin,...] [--limit N] [--dry-run]
 """
@@ -25,9 +25,9 @@ import time
 
 sys.path.insert(0, ".")
 
-from chess_tracker.cli import DEFAULT_DB  # noqa: E402
-from chess_tracker.db import open_db  # noqa: E402
-from chess_tracker.puzzles import (DEFAULT_MAX_RATING, DEFAULT_MIN_PLAYS,  # noqa: E402
+from chess_mistake_coach.cli import DEFAULT_DB  # noqa: E402
+from chess_mistake_coach.db import open_db  # noqa: E402
+from chess_mistake_coach.puzzles import (DEFAULT_MAX_RATING, DEFAULT_MIN_PLAYS,  # noqa: E402
                                    DEFAULT_MIN_RATING, import_puzzles)
 
 

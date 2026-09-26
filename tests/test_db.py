@@ -1,4 +1,4 @@
-from chess_tracker.db import already_analysed, get_settings, open_db, save_game, set_settings
+from chess_mistake_coach.db import already_analysed, get_settings, open_db, save_game, set_settings
 
 _REC = {
     "url": "https://example.com/g1", "username": "alice", "end_time": 1000,

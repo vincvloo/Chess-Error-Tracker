@@ -1,4 +1,4 @@
-from chess_tracker.web.demo_data import (DEMO_USERNAME, demo_dashboard_data,
+from chess_mistake_coach.web.demo_data import (DEMO_USERNAME, demo_dashboard_data,
                                           render_demo_dashboard_html)
 
 

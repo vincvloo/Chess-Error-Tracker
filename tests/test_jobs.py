@@ -3,10 +3,10 @@ import time
 
 import pytest
 
-from chess_tracker.analysis_runner import DEFAULT_PARALLEL_THRESHOLD
-from chess_tracker.chesscom import ChessComError
-from chess_tracker.db import open_db
-from chess_tracker.web.jobs import FIRST_RUN_GAME_LIMIT, JobAlreadyRunningError, JobManager
+from chess_mistake_coach.analysis_runner import DEFAULT_PARALLEL_THRESHOLD
+from chess_mistake_coach.chesscom import ChessComError
+from chess_mistake_coach.db import open_db
+from chess_mistake_coach.web.jobs import FIRST_RUN_GAME_LIMIT, JobAlreadyRunningError, JobManager
 
 
 def _wait_for(jobs: JobManager, job_id: str, timeout: float = 2.0) -> dict:
@@ -41,7 +41,7 @@ def test_start_job_reaches_done_state(tmp_path, monkeypatch):
         if progress_cb:
             progress_cb(users[0], 1, 1)
 
-    monkeypatch.setattr("chess_tracker.web.jobs.run_analysis", fake_run_analysis)
+    monkeypatch.setattr("chess_mistake_coach.web.jobs.run_analysis", fake_run_analysis)
 
     jobs = _jobs(tmp_path)
     status = jobs.start_job(["alice"], "you@example.com", "/fake/engine", 14, 2, 0.1)
@@ -63,7 +63,7 @@ def test_start_job_rejects_concurrent_jobs(tmp_path, monkeypatch):
         started.set()
         release.wait(timeout=2)
 
-    monkeypatch.setattr("chess_tracker.web.jobs.run_analysis", fake_run_analysis)
+    monkeypatch.setattr("chess_mistake_coach.web.jobs.run_analysis", fake_run_analysis)
 
     jobs = _jobs(tmp_path)
     jobs.start_job(["alice"], "you@example.com", "/fake/engine", 14, 2, 0.1)
@@ -80,7 +80,7 @@ def test_job_error_state_captures_chesscomerror(tmp_path, monkeypatch):
                           progress_cb=None, cancel_event=None, **kwargs):
         raise ChessComError("No such Chess.com user: bogus")
 
-    monkeypatch.setattr("chess_tracker.web.jobs.run_analysis", fake_run_analysis)
+    monkeypatch.setattr("chess_mistake_coach.web.jobs.run_analysis", fake_run_analysis)
 
     jobs = _jobs(tmp_path)
     status = jobs.start_job(["bogus"], "you@example.com", "/fake/engine", 14, 2, 0.1)
@@ -95,7 +95,7 @@ def test_job_error_state_captures_unexpected_exceptions(tmp_path, monkeypatch):
                           progress_cb=None, cancel_event=None, **kwargs):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("chess_tracker.web.jobs.run_analysis", fake_run_analysis)
+    monkeypatch.setattr("chess_mistake_coach.web.jobs.run_analysis", fake_run_analysis)
 
     jobs = _jobs(tmp_path)
     status = jobs.start_job(["alice"], "you@example.com", "/fake/engine", 14, 2, 0.1)
@@ -113,7 +113,7 @@ def test_cancel_reports_cancelled_state(tmp_path, monkeypatch):
                           progress_cb=None, cancel_event=None, **kwargs):
         cancel_event.wait(timeout=2)
 
-    monkeypatch.setattr("chess_tracker.web.jobs.run_analysis", fake_run_analysis)
+    monkeypatch.setattr("chess_mistake_coach.web.jobs.run_analysis", fake_run_analysis)
 
     jobs = _jobs(tmp_path)
     status = jobs.start_job(["alice"], "you@example.com", "/fake/engine", 14, 2, 0.1)
@@ -139,7 +139,7 @@ def test_get_active_job_id_reflects_running_and_finished_state(tmp_path, monkeyp
         started.set()
         release.wait(timeout=2)
 
-    monkeypatch.setattr("chess_tracker.web.jobs.run_analysis", fake_run_analysis)
+    monkeypatch.setattr("chess_mistake_coach.web.jobs.run_analysis", fake_run_analysis)
 
     jobs = _jobs(tmp_path)
     assert jobs.get_active_job_id() is None

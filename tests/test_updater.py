@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from chess_tracker.web import updater
+from chess_mistake_coach.web import updater
 
 GIT = updater.find_git()
 pytestmark = pytest.mark.skipif(GIT is None, reason="git not found on PATH")
