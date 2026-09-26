@@ -72,6 +72,13 @@ def test_full_backup_includes_the_caches(tmp_path):
     assert _count(info["path"], "puzzles") == 1 and _count(info["path"], "archives") == 1
 
 
+def test_the_engine_position_cache_counts_as_a_recreatable_cache_and_absence_is_fine(tmp_path):
+    assert "position_evals" in bk.CACHE_TABLES and "position_evals" not in bk.USER_TABLES
+    db = _populated(str(tmp_path / "live.db"))      # this schema may not have the table at all
+    info = bk.create_backup(db, str(tmp_path / "full.db"), full=True)
+    assert info["kind"] == "full"
+
+
 def test_backup_is_a_single_plain_file_and_leaves_no_partial(tmp_path):
     db = _populated(str(tmp_path / "live.db"))
     dest = str(tmp_path / "out" / "b.db")

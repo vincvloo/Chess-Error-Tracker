@@ -31,7 +31,9 @@ USER_TABLES = (
     "user_streaks", "user_puzzle_ratings", "user_game_ratings", "badges_earned",
     "puzzle_rush_scores", "daily_puzzles",
 )
-CACHE_TABLES = ("archives", "puzzles", "puzzle_source_stats")
+# position_evals (engine verdicts on opening positions) only exists once the
+# position cache is in; tables missing from a database are simply skipped.
+CACHE_TABLES = ("archives", "puzzles", "puzzle_source_stats", "position_evals")
 META_TABLE = "backup_meta"
 
 
