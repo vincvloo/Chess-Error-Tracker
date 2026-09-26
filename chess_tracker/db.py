@@ -160,6 +160,18 @@ CREATE TABLE IF NOT EXISTS puzzle_source_stats (
     updated_at   TEXT
 );
 
+-- Engine verdicts on opening positions (chess_tracker/position_cache.py), so
+-- the same position isn't analysed again for every game that reaches it. Only
+-- a speed-up: safe to delete, and left out of the default backup.
+CREATE TABLE IF NOT EXISTS position_evals (
+    engine    TEXT NOT NULL,
+    epd       TEXT NOT NULL,
+    depth     INTEGER NOT NULL,
+    cp_white  INTEGER NOT NULL,
+    best      TEXT NOT NULL,
+    PRIMARY KEY (engine, epd, depth)
+) WITHOUT ROWID;
+
 -- Gamification (chess_tracker/gamification.py). All keyed by username, none
 -- with a FK to another table, same reasoning as practice_attempts.
 
